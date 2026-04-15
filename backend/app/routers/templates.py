@@ -65,6 +65,36 @@ async def create_template(body: TemplateCreate, current_user: CurrentUser):
     return _to_response(doc_ref.id, data)
 
 
+@router.put("/api/templates/{template_id}", response_model=TemplateResponse)
+async def update_template(template_id: str, body: TemplateCreate, current_user: CurrentUser):
+    """Update an existing template."""
+    doc_ref = _templates_ref().document(template_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Template not found")
+
+    now = datetime.now(UTC)
+    updates = {
+        "name": body.name,
+        "description": body.description,
+        "key_values": [kv.model_dump() for kv in body.key_values],
+        "tables": [t.model_dump() for t in body.tables],
+        "updated_at": now,
+    }
+    doc_ref.update(updates)
+    return _to_response(template_id, {**doc.to_dict(), **updates})
+
+
+@router.delete("/api/templates/{template_id}", status_code=204)
+async def delete_template(template_id: str, current_user: CurrentUser):
+    """Delete a template."""
+    doc_ref = _templates_ref().document(template_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Template not found")
+    doc_ref.delete()
+
+
 @router.post("/api/projects/{project_id}/apply-template/{template_id}", status_code=201)
 async def apply_template(project_id: str, template_id: str, current_user: CurrentUser):
     """Apply a template to a project — creates all key-value and table assumptions."""
