@@ -140,22 +140,55 @@ function DataSourceConfig({ projectId }: Props) {
 
           {(newSource.type === 'csv' || newSource.type === 'excel') && (
             <div className="mb-3">
+              <div className="mb-2 rounded bg-blue-50 p-3 text-xs text-blue-800">
+                <p className="font-medium">How to connect a {newSource.type === 'csv' ? 'CSV' : 'Excel'} file:</p>
+                <ol className="mt-1 ml-4 list-decimal space-y-0.5">
+                  <li>Choose your {newSource.type === 'csv' ? '.csv' : '.xlsx'} file below</li>
+                  <li>The first row should contain column headers (e.g. "land_cost", "unit_count")</li>
+                  <li>Click "Create & Discover" to detect available fields</li>
+                  <li>Map each field to an assumption key, then click "Save Mappings"</li>
+                  <li>Hit "Sync" to pull the values into your assumptions</li>
+                </ol>
+              </div>
               <input type="file" accept={newSource.type === 'csv' ? '.csv' : '.xlsx,.xls'}
                 onChange={(e) => setCsvFile(e.target.files?.[0] ?? null)} className="text-sm" />
             </div>
           )}
 
           {newSource.type === 'airtable' && (
-            <div className="mb-3 flex gap-2">
-              <input placeholder="Base ID" value={airtableConfig.base_id}
-                onChange={(e) => setAirtableConfig({ ...airtableConfig, base_id: e.target.value })}
-                className="rounded border px-2 py-1 text-sm" />
-              <input placeholder="Table Name" value={airtableConfig.table_name}
-                onChange={(e) => setAirtableConfig({ ...airtableConfig, table_name: e.target.value })}
-                className="rounded border px-2 py-1 text-sm" />
-              <input placeholder="API Key" type="password" value={airtableConfig.api_key}
-                onChange={(e) => setAirtableConfig({ ...airtableConfig, api_key: e.target.value })}
-                className="rounded border px-2 py-1 text-sm" />
+            <div className="mb-3">
+              <div className="mb-3 rounded bg-blue-50 p-3 text-xs text-blue-800">
+                <p className="font-medium">How to connect Airtable:</p>
+                <ol className="mt-1 ml-4 list-decimal space-y-0.5">
+                  <li>Open your Airtable base in the browser</li>
+                  <li><strong>Base ID</strong> — In the URL: airtable.com/<strong>appXXXXXXXXXX</strong>/... (starts with "app")</li>
+                  <li><strong>Table Name</strong> — The tab name at the top of your base (e.g. "Properties", "Units")</li>
+                  <li><strong>API Key</strong> — Go to <span className="font-mono">airtable.com/create/tokens</span> &rarr; Create token &rarr; give it <code>data.records:read</code> scope on your base</li>
+                  <li>Click "Create & Discover" to fetch available fields from your table</li>
+                  <li>Map each Airtable field to an assumption key, then "Save Mappings"</li>
+                  <li>Hit "Sync" to pull the latest values into your assumptions</li>
+                </ol>
+              </div>
+              <div className="flex gap-2">
+                <div className="flex-1">
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Base ID</label>
+                  <input placeholder="appXXXXXXXXXXXXXX" value={airtableConfig.base_id}
+                    onChange={(e) => setAirtableConfig({ ...airtableConfig, base_id: e.target.value })}
+                    className="w-full rounded border px-2 py-1.5 text-sm font-mono" />
+                </div>
+                <div className="flex-1">
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Table Name</label>
+                  <input placeholder="Properties" value={airtableConfig.table_name}
+                    onChange={(e) => setAirtableConfig({ ...airtableConfig, table_name: e.target.value })}
+                    className="w-full rounded border px-2 py-1.5 text-sm" />
+                </div>
+                <div className="flex-1">
+                  <label className="mb-1 block text-xs font-medium text-gray-600">Personal Access Token</label>
+                  <input placeholder="pat..." type="password" value={airtableConfig.api_key}
+                    onChange={(e) => setAirtableConfig({ ...airtableConfig, api_key: e.target.value })}
+                    className="w-full rounded border px-2 py-1.5 text-sm font-mono" />
+                </div>
+              </div>
             </div>
           )}
 
