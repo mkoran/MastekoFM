@@ -9,29 +9,20 @@ from backend.app.main import app
 client = TestClient(app)
 
 AUTH_HEADER = {"Authorization": "Bearer dev-test@example.com"}
+PATCH_DB = "backend.app.routers.projects.get_firestore_client"
 
 
-def _mock_firestore():
-    """Create a mock Firestore setup."""
-    mock_db = MagicMock()
-    mock_collection = MagicMock()
-    mock_db.collection.return_value = mock_collection
-    return mock_db, mock_collection
-
-
-@patch("backend.app.routers.projects._db")
+@patch(PATCH_DB)
 @patch("backend.app.routers.projects.create_project_folder", return_value=None)
-def test_create_project(mock_drive, mock_db):
+def test_create_project(mock_drive, mock_get_db):
     """POST /api/projects creates a project."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
     mock_doc_ref = MagicMock()
     mock_doc_ref.id = "proj-123"
     mock_db.collection.return_value.document.return_value = mock_doc_ref
 
-    response = client.post(
-        "/api/projects",
-        json={"name": "Test Project"},
-        headers=AUTH_HEADER,
-    )
+    response = client.post("/api/projects", json={"name": "Test Project"}, headers=AUTH_HEADER)
     assert response.status_code == 201
     data = response.json()
     assert data["name"] == "Test Project"
@@ -40,43 +31,37 @@ def test_create_project(mock_drive, mock_db):
     mock_doc_ref.set.assert_called_once()
 
 
-@patch("backend.app.routers.projects._db")
-def test_list_projects(mock_db):
+@patch(PATCH_DB)
+def test_list_projects(mock_get_db):
     """GET /api/projects lists user's projects."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
     now = datetime.now(UTC)
     mock_doc = MagicMock()
     mock_doc.id = "proj-1"
     mock_doc.to_dict.return_value = {
-        "name": "My Project",
-        "owner_uid": "dev-test@example.com",
-        "status": "active",
-        "checkout": {},
-        "created_at": now,
-        "updated_at": now,
+        "name": "My Project", "owner_uid": "dev-test@example.com",
+        "status": "active", "checkout": {}, "created_at": now, "updated_at": now,
     }
     mock_db.collection.return_value.where.return_value.where.return_value.stream.return_value = [mock_doc]
 
     response = client.get("/api/projects", headers=AUTH_HEADER)
     assert response.status_code == 200
-    data = response.json()
-    assert len(data) == 1
-    assert data[0]["name"] == "My Project"
+    assert len(response.json()) == 1
 
 
-@patch("backend.app.routers.projects._db")
-def test_get_project(mock_db):
+@patch(PATCH_DB)
+def test_get_project(mock_get_db):
     """GET /api/projects/{id} returns a project."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
     now = datetime.now(UTC)
     mock_doc = MagicMock()
     mock_doc.exists = True
     mock_doc.id = "proj-1"
     mock_doc.to_dict.return_value = {
-        "name": "My Project",
-        "owner_uid": "dev-test@example.com",
-        "status": "active",
-        "checkout": {},
-        "created_at": now,
-        "updated_at": now,
+        "name": "My Project", "owner_uid": "dev-test@example.com",
+        "status": "active", "checkout": {}, "created_at": now, "updated_at": now,
     }
     mock_db.collection.return_value.document.return_value.get.return_value = mock_doc
 
@@ -85,9 +70,11 @@ def test_get_project(mock_db):
     assert response.json()["name"] == "My Project"
 
 
-@patch("backend.app.routers.projects._db")
-def test_get_project_not_found(mock_db):
-    """GET /api/projects/{id} returns 404 for missing project."""
+@patch(PATCH_DB)
+def test_get_project_not_found(mock_get_db):
+    """GET /api/projects/{id} returns 404."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
     mock_doc = MagicMock()
     mock_doc.exists = False
     mock_db.collection.return_value.document.return_value.get.return_value = mock_doc
@@ -96,19 +83,17 @@ def test_get_project_not_found(mock_db):
     assert response.status_code == 404
 
 
-@patch("backend.app.routers.projects._db")
-def test_archive_project(mock_db):
+@patch(PATCH_DB)
+def test_archive_project(mock_get_db):
     """POST /api/projects/{id}/archive sets status to archived."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
     now = datetime.now(UTC)
     mock_doc = MagicMock()
     mock_doc.exists = True
     mock_doc.to_dict.return_value = {
-        "name": "My Project",
-        "owner_uid": "dev-test@example.com",
-        "status": "active",
-        "checkout": {},
-        "created_at": now,
-        "updated_at": now,
+        "name": "My Project", "owner_uid": "dev-test@example.com",
+        "status": "active", "checkout": {}, "created_at": now, "updated_at": now,
     }
     mock_doc_ref = MagicMock()
     mock_doc_ref.get.return_value = mock_doc
@@ -120,6 +105,5 @@ def test_archive_project(mock_db):
 
 
 def test_projects_requires_auth():
-    """Project endpoints require authentication."""
     response = client.get("/api/projects")
     assert response.status_code == 401

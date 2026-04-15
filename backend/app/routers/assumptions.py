@@ -3,23 +3,20 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from google.cloud import firestore
 
-from backend.app.config import settings
+from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
 from backend.app.models.assumption import AssumptionCreate, AssumptionResponse, AssumptionUpdate, HistoryEntry
 from backend.app.services.assumption_engine import validate_assumption_value
 
 router = APIRouter(prefix="/api/projects/{project_id}/assumptions", tags=["assumptions"])
 
-_db = firestore.Client(project=settings.gcp_project)
-
 CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
 
 
 def _assumptions_ref(project_id: str):
     prefix = settings.firestore_collection_prefix
-    return _db.collection(f"{prefix}projects").document(project_id).collection("assumptions")
+    return get_firestore_client().collection(f"{prefix}projects").document(project_id).collection("assumptions")
 
 
 def _to_response(doc_id: str, data: dict[str, Any]) -> AssumptionResponse:

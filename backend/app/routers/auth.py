@@ -3,15 +3,12 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
-from google.cloud import firestore
 
-from backend.app.config import settings
+from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
 from backend.app.models.user import UserInDB, UserResponse
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-_db = firestore.Client(project=settings.gcp_project)
 
 CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
 
@@ -23,7 +20,8 @@ def _users_collection() -> str:
 @router.get("/me", response_model=UserResponse)
 async def get_me(current_user: CurrentUser):
     """Get current user profile. Creates on first login (upsert)."""
-    doc_ref = _db.collection(_users_collection()).document(current_user["uid"])
+    db = get_firestore_client()
+    doc_ref = db.collection(_users_collection()).document(current_user["uid"])
     doc = doc_ref.get()
 
     if doc.exists:

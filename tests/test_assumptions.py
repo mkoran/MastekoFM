@@ -10,16 +10,18 @@ client = TestClient(app)
 
 AUTH = {"Authorization": "Bearer dev-test@example.com"}
 BASE = "/api/projects/proj-1/assumptions"
+PATCH_DB = "backend.app.routers.assumptions.get_firestore_client"
 
 
-@patch("backend.app.routers.assumptions._db")
-def test_create_assumption(mock_db):
+@patch(PATCH_DB)
+def test_create_assumption(mock_get_db):
     """POST creates an assumption with history entry."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
     mock_doc_ref = MagicMock()
     mock_doc_ref.id = "asmp-1"
     mock_history_ref = MagicMock()
     mock_doc_ref.collection.return_value = mock_history_ref
-
     mock_db.collection.return_value.document.return_value.collection.return_value.document.return_value = mock_doc_ref
 
     response = client.post(
@@ -36,9 +38,11 @@ def test_create_assumption(mock_db):
     mock_history_ref.add.assert_called_once()
 
 
-@patch("backend.app.routers.assumptions._db")
-def test_list_assumptions(mock_db):
+@patch(PATCH_DB)
+def test_list_assumptions(mock_get_db):
     """GET lists assumptions."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
     now = datetime.now(UTC)
     mock_doc = MagicMock()
     mock_doc.id = "asmp-1"
@@ -54,9 +58,11 @@ def test_list_assumptions(mock_db):
     assert len(response.json()) == 1
 
 
-@patch("backend.app.routers.assumptions._db")
-def test_update_assumption_creates_history(mock_db):
+@patch(PATCH_DB)
+def test_update_assumption_creates_history(mock_get_db):
     """PUT on value change creates history entry."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
     now = datetime.now(UTC)
     mock_doc = MagicMock()
     mock_doc.exists = True
@@ -69,7 +75,6 @@ def test_update_assumption_creates_history(mock_db):
     mock_doc_ref.get.return_value = mock_doc
     mock_history_ref = MagicMock()
     mock_doc_ref.collection.return_value = mock_history_ref
-
     mock_db.collection.return_value.document.return_value.collection.return_value.document.return_value = mock_doc_ref
 
     response = client.put(f"{BASE}/asmp-1", json={"value": 2000}, headers=AUTH)

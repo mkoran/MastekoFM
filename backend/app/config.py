@@ -2,7 +2,6 @@
 import os
 from pathlib import Path
 
-import firebase_admin
 from pydantic_settings import BaseSettings
 
 
@@ -33,10 +32,16 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-def _init_firebase() -> None:
-    """Initialize Firebase Admin SDK if not already initialized."""
+def init_firebase() -> None:
+    """Initialize Firebase Admin SDK. Call lazily, not at import time."""
+    import firebase_admin
+
     if not firebase_admin._apps:
         firebase_admin.initialize_app()
 
 
-_init_firebase()
+def get_firestore_client():
+    """Get a Firestore client. Lazy initialization for test compatibility."""
+    from google.cloud import firestore
+
+    return firestore.Client(project=settings.gcp_project)

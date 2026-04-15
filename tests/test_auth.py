@@ -21,9 +21,11 @@ def test_auth_me_rejects_invalid_bearer():
     assert response.status_code == 401
 
 
-@patch("backend.app.routers.auth._db")
-def test_auth_me_dev_bypass_creates_user(mock_db):
+@patch("backend.app.routers.auth.get_firestore_client")
+def test_auth_me_dev_bypass_creates_user(mock_get_db):
     """GET /api/auth/me with dev token creates user profile."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
     mock_doc = MagicMock()
     mock_doc.exists = False
     mock_doc_ref = MagicMock()
@@ -41,9 +43,11 @@ def test_auth_me_dev_bypass_creates_user(mock_db):
     mock_doc_ref.set.assert_called_once()
 
 
-@patch("backend.app.routers.auth._db")
-def test_auth_me_dev_bypass_returns_existing_user(mock_db):
+@patch("backend.app.routers.auth.get_firestore_client")
+def test_auth_me_dev_bypass_returns_existing_user(mock_get_db):
     """GET /api/auth/me with dev token returns existing user."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
     now = datetime.now(UTC)
     mock_doc = MagicMock()
     mock_doc.exists = True

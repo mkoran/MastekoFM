@@ -3,16 +3,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from google.cloud import firestore
 
-from backend.app.config import settings
+from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
 from backend.app.models.project import ProjectCreate, ProjectInDB, ProjectResponse, ProjectUpdate
 from backend.app.services.drive_service import create_project_folder
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
-
-_db = firestore.Client(project=settings.gcp_project)
 
 CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
 
@@ -44,7 +41,7 @@ async def create_project(body: ProjectCreate, current_user: CurrentUser):
     if folder_id:
         project_data["drive_folder_id"] = folder_id
 
-    doc_ref = _db.collection(_projects_collection()).document()
+    doc_ref = get_firestore_client().collection(_projects_collection()).document()
     doc_ref.set(project_data)
     return _project_to_response(doc_ref.id, project_data)
 
@@ -53,7 +50,7 @@ async def create_project(body: ProjectCreate, current_user: CurrentUser):
 async def list_projects(current_user: CurrentUser):
     """List projects owned by the current user."""
     docs = (
-        _db.collection(_projects_collection())
+        get_firestore_client().collection(_projects_collection())
         .where("owner_uid", "==", current_user["uid"])
         .where("status", "==", "active")
         .stream()
@@ -64,7 +61,7 @@ async def list_projects(current_user: CurrentUser):
 @router.get("/{project_id}", response_model=ProjectResponse)
 async def get_project(project_id: str, current_user: CurrentUser):
     """Get a single project."""
-    doc = _db.collection(_projects_collection()).document(project_id).get()
+    doc = get_firestore_client().collection(_projects_collection()).document(project_id).get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
     data = doc.to_dict()
@@ -76,7 +73,7 @@ async def get_project(project_id: str, current_user: CurrentUser):
 @router.put("/{project_id}", response_model=ProjectResponse)
 async def update_project(project_id: str, body: ProjectUpdate, current_user: CurrentUser):
     """Update a project."""
-    doc_ref = _db.collection(_projects_collection()).document(project_id)
+    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -94,7 +91,7 @@ async def update_project(project_id: str, body: ProjectUpdate, current_user: Cur
 @router.post("/{project_id}/archive", response_model=ProjectResponse)
 async def archive_project(project_id: str, current_user: CurrentUser):
     """Archive a project (soft delete)."""
-    doc_ref = _db.collection(_projects_collection()).document(project_id)
+    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -127,7 +124,7 @@ def _is_checkout_active(checkout: dict[str, Any]) -> bool:
 @router.post("/{project_id}/checkout", response_model=ProjectResponse)
 async def checkout_project(project_id: str, current_user: CurrentUser):
     """Acquire a checkout lock on a project (2-hour expiry)."""
-    doc_ref = _db.collection(_projects_collection()).document(project_id)
+    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -154,7 +151,7 @@ async def checkout_project(project_id: str, current_user: CurrentUser):
 @router.post("/{project_id}/checkin", response_model=ProjectResponse)
 async def checkin_project(project_id: str, current_user: CurrentUser):
     """Release a checkout lock."""
-    doc_ref = _db.collection(_projects_collection()).document(project_id)
+    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -174,7 +171,7 @@ async def checkin_project(project_id: str, current_user: CurrentUser):
 @router.post("/{project_id}/force-release", response_model=ProjectResponse)
 async def force_release(project_id: str, current_user: CurrentUser):
     """Force-release a checkout. Owner only."""
-    doc_ref = _db.collection(_projects_collection()).document(project_id)
+    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")

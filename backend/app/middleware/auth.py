@@ -3,7 +3,6 @@ import os
 from typing import Any
 
 from fastapi import HTTPException, Request
-from firebase_admin import auth as firebase_auth
 
 
 def get_current_user(request: Request) -> dict[str, Any]:
@@ -19,7 +18,13 @@ def get_current_user(request: Request) -> dict[str, Any]:
         email = token.removeprefix("dev-")
         return {"uid": f"dev-{email}", "email": email, "display_name": email.split("@")[0]}
 
-    # Firebase Auth token verification
+    # Firebase Auth token verification (lazy import)
+    from backend.app.config import init_firebase
+
+    init_firebase()
+
+    from firebase_admin import auth as firebase_auth
+
     try:
         decoded = firebase_auth.verify_id_token(token)
         return {
