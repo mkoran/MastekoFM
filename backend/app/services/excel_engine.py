@@ -25,14 +25,25 @@ def _find_libreoffice() -> str | None:
     return None
 
 
-def inject_values(wb: openpyxl.Workbook, sheet_name: str, cell_map: dict[str, Any]) -> None:
+def inject_values(wb: openpyxl.Workbook, sheet_name: str, cell_map: dict[str, Any]) -> int:
     """Inject values into specific cells of a worksheet.
 
     cell_map: {"B5": "Campus Adele", "B7": "2025-03-01", "B8": 13, ...}
+    Skips merged cells gracefully. Returns count of successfully injected values.
     """
     ws = wb[sheet_name]
+    injected = 0
     for cell_ref, value in cell_map.items():
-        ws[cell_ref] = value
+        try:
+            cell = ws[cell_ref]
+            if hasattr(cell, "value") and not isinstance(cell, openpyxl.cell.cell.MergedCell):
+                cell.value = value
+                injected += 1
+            else:
+                logger.warning("Skipping merged/read-only cell %s in %s", cell_ref, sheet_name)
+        except (AttributeError, TypeError):
+            logger.warning("Could not inject into cell %s in %s", cell_ref, sheet_name)
+    return injected
 
 
 def inject_table_data(wb: openpyxl.Workbook, sheet_name: str, start_row: int, columns: list[str], rows: list[dict[str, Any]]) -> None:
@@ -137,35 +148,31 @@ def calculate_model(model_bytes: bytes, assumptions: dict[str, Any]) -> dict[str
 
     Returns dict with all calculated outputs.
     """
-    # Load workbook for injection (NOT data_only — preserve formulas)
-    wb = openpyxl.load_workbook(io.BytesIO(model_bytes))
+    # Try injection + recalculation, fall back to cached values
+    try:
+        wb = openpyxl.load_workbook(io.BytesIO(model_bytes))
 
-    # Inject key-value assumptions into "Inputs & Assumptions" sheet
-    kv_map = assumptions.get("key_values", {})
-    if kv_map and "Inputs & Assumptions" in wb.sheetnames:
-        inject_values(wb, "Inputs & Assumptions", kv_map)
+        kv_map = assumptions.get("key_values", {})
+        if kv_map and "Inputs & Assumptions" in wb.sheetnames:
+            count = inject_values(wb, "Inputs & Assumptions", kv_map)
+            logger.info("Injected %d/%d values", count, len(kv_map))
 
-    # Inject table data if provided
-    for table_inject in assumptions.get("table_injections", []):
-        inject_table_data(
-            wb,
-            table_inject["sheet"],
-            table_inject["start_row"],
-            table_inject["columns"],
-            table_inject["rows"],
-        )
+        for table_inject in assumptions.get("table_injections", []):
+            inject_table_data(wb, table_inject["sheet"], table_inject["start_row"],
+                              table_inject["columns"], table_inject["rows"])
 
-    # Save to bytes
-    buf = io.BytesIO()
-    wb.save(buf)
-    injected_bytes = buf.getvalue()
+        buf = io.BytesIO()
+        wb.save(buf)
+        injected_bytes = buf.getvalue()
+        wb.close()
 
-    # Recalculate
-    recalced = recalculate_with_libreoffice(injected_bytes)
-    if recalced:
-        result_wb = openpyxl.load_workbook(io.BytesIO(recalced), data_only=True)
-    else:
-        # Fallback: read the original with data_only (shows cached values)
+        recalced = recalculate_with_libreoffice(injected_bytes)
+        if recalced:
+            result_wb = openpyxl.load_workbook(io.BytesIO(recalced), data_only=True)
+        else:
+            result_wb = openpyxl.load_workbook(io.BytesIO(model_bytes), data_only=True)
+    except Exception:
+        logger.exception("Injection failed — using cached values from original file")
         result_wb = openpyxl.load_workbook(io.BytesIO(model_bytes), data_only=True)
 
     # Extract outputs
