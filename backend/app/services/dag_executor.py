@@ -111,6 +111,11 @@ def run_calculation(project_id: str) -> dict[str, Any]:
                 drive_link = f"https://docs.google.com/spreadsheets/d/{drive_file_id}"
                 logger.info("Saved model to Drive: %s", drive_link)
 
+        # Store the output file for download
+        _get_project_ref(project_id).update({
+            "output_file_b64": base64.b64encode(final_bytes).decode(),
+        })
+
         # Update project with calculation results
         _get_project_ref(project_id).update({
             "calculation_status": "done",

@@ -1,9 +1,10 @@
-"""Spreadsheets router — upload model, configure mappings."""
+"""Spreadsheets router — upload model, configure mappings, download output."""
 import base64
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
+from fastapi.responses import Response
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
@@ -91,3 +92,28 @@ async def get_cached_outputs(project_id: str, current_user: CurrentUser):
         "calculation_status": data.get("calculation_status", "idle"),
         "last_calculated_at": data.get("last_calculated_at"),
     }
+
+
+@router.get("/download")
+async def download_output(project_id: str, current_user: CurrentUser):
+    """Download the last calculated .xlsx model file."""
+    doc = _project_ref(project_id).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Project not found")
+    data = doc.to_dict()
+
+    output_b64 = data.get("output_file_b64")
+    if not output_b64:
+        # Fall back to the template model if no calculated output exists
+        output_b64 = data.get("model_file_b64")
+    if not output_b64:
+        raise HTTPException(status_code=404, detail="No model file available for download")
+
+    content = base64.b64decode(output_b64)
+    filename = data.get("output_filename", "model.xlsx")
+
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )

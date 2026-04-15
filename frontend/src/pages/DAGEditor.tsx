@@ -182,23 +182,28 @@ function DAGEditor({ projectId }: Props) {
         <div>
           <h3 className="mb-3 text-lg font-semibold text-gray-900">Results</h3>
 
-          {driveLink && (
-            <div className="mb-4 rounded border border-green-200 bg-green-50 p-4">
-              <h4 className="mb-2 font-medium text-green-900">Excel File Ready</h4>
-              <p className="mb-3 text-sm text-green-800">
-                Your model has been calculated and saved to Google Drive. Open it to see all inputs,
-                formulas, calculations, and outputs in the full Excel workbook.
-              </p>
+          <div className="mb-4 rounded border border-green-200 bg-green-50 p-4">
+            <h4 className="mb-2 font-medium text-green-900">Excel File Ready</h4>
+            <p className="mb-3 text-sm text-green-800">
+              Your model has been calculated with {String((outputs as Record<string, unknown>).assumptions_injected ?? 0)} assumptions injected.
+              {(outputs as Record<string, unknown>).libreoffice_used ? ' LibreOffice recalculated all formulas.' : ' Formulas preserved (LibreOffice not available).'}
+              {' '}Download the complete Excel workbook to see all inputs, calculations, and outputs.
+            </p>
+            <div className="flex gap-3">
               <a
-                href={driveLink}
-                target="_blank"
-                rel="noopener noreferrer"
+                href={`/api/projects/${projectId}/model/download`}
                 className="inline-flex items-center gap-2 rounded bg-green-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-green-800"
               >
-                Open in Google Drive
+                Download Excel File
               </a>
+              {driveLink && (
+                <a href={driveLink} target="_blank" rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 rounded border border-green-700 px-4 py-2.5 text-sm font-medium text-green-700 hover:bg-green-100">
+                  Open in Google Drive
+                </a>
+              )}
             </div>
-          )}
+          </div>
 
           {Object.keys(outputs).length > 0 && (
             <div className="rounded border bg-white p-4">
