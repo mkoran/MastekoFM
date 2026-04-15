@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../services/api'
 import AssumptionsTable from './AssumptionsTable'
+import DataSourceConfig from './DataSourceConfig'
 
 interface Project {
   id: string
@@ -19,7 +20,7 @@ function ProjectView() {
   const { projectId } = useParams<{ projectId: string }>()
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
-  const [activeTab, setActiveTab] = useState<'assumptions' | 'dag' | 'reports'>('assumptions')
+  const [activeTab, setActiveTab] = useState<'assumptions' | 'datasources' | 'dag' | 'reports'>('assumptions')
 
   useEffect(() => {
     if (projectId) {
@@ -32,7 +33,7 @@ function ProjectView() {
   if (loading) return <div className="flex min-h-screen items-center justify-center"><p>Loading...</p></div>
   if (!project) return <div className="p-8"><p>Project not found.</p></div>
 
-  const tabs = ['assumptions', 'dag', 'reports'] as const
+  const tabs = ['assumptions', 'datasources', 'dag', 'reports'] as const
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -68,6 +69,7 @@ function ProjectView() {
 
       <main className="mx-auto max-w-6xl px-8 py-6">
         {activeTab === 'assumptions' && projectId && <AssumptionsTable projectId={projectId} />}
+        {activeTab === 'datasources' && projectId && <DataSourceConfig projectId={projectId} />}
         {activeTab === 'dag' && <p className="text-gray-500">DAG editor — coming in Sprint 3.</p>}
         {activeTab === 'reports' && <p className="text-gray-500">Reports — coming in Sprint 5.</p>}
       </main>
