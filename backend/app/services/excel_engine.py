@@ -166,9 +166,15 @@ def calculate_model(model_bytes: bytes, assumptions: dict[str, Any]) -> dict[str
     except Exception:
         logger.exception("Injection/recalc failed")
 
-    # Step 2: Read results — prefer recalculated, fall back to original cached values
+    # Step 2: Read results — write to temp file for reliable data_only parsing
     source = recalced_bytes if recalced_bytes else model_bytes
-    result_wb = openpyxl.load_workbook(io.BytesIO(source), data_only=True)
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(source)
+        tmp_path = tmp.name
+    try:
+        result_wb = openpyxl.load_workbook(tmp_path, data_only=True)
+    finally:
+        os.unlink(tmp_path)
 
     # Extract outputs
     outputs: dict[str, Any] = {}
