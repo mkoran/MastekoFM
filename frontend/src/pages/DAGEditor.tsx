@@ -20,6 +20,7 @@ interface Props { projectId: string }
 function DAGEditor({ projectId }: Props) {
   const [status, setStatus] = useState<ModelStatus | null>(null)
   const [outputs, setOutputs] = useState<Record<string, unknown>>({})
+  const [driveLink, setDriveLink] = useState<string | null>(null)
   const [calculating, setCalculating] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
@@ -67,8 +68,11 @@ function DAGEditor({ projectId }: Props) {
     try {
       const result = await api.post<CalcResult>(`/projects/${projectId}/calculate`, {})
       if (result.success) {
-        setMessage({ text: `Calculation complete.`, type: 'success' })
-        setOutputs(result.outputs)
+        const out = result.outputs as Record<string, unknown>
+        const link = out.drive_link as string | null
+        setDriveLink(link)
+        setOutputs(out)
+        setMessage({ text: link ? 'Calculation complete! Excel file saved to Google Drive.' : 'Calculation complete (Drive not configured — set DRIVE_ROOT_FOLDER_ID).', type: 'success' })
         api.get<ModelStatus>(`${modelBase}/status`).then(setStatus)
       } else {
         setMessage({ text: `Calculation failed: ${result.errors.join(', ')}`, type: 'error' })
@@ -107,10 +111,10 @@ function DAGEditor({ projectId }: Props) {
             <p className="font-medium">How it works:</p>
             <ol className="mt-1 ml-4 list-decimal space-y-0.5">
               <li>Upload your .xlsx financial model (the one with all the formulas)</li>
-              <li>Configure input mappings: which assumptions map to which Excel cells</li>
-              <li>Click "Calculate" — your assumptions are injected, LibreOffice recalculates all formulas</li>
-              <li>Outputs (Annual Summary, Sources & Uses, etc.) are extracted and displayed below</li>
-              <li>Change any assumption, recalculate, and see updated results instantly</li>
+              <li>Configure input mappings: which assumption keys map to which Excel cells</li>
+              <li>Click "Calculate" — assumptions are injected into the Excel, LibreOffice recalculates all formulas</li>
+              <li>The completed Excel file is saved to Google Drive with all inputs, calculations, and outputs</li>
+              <li>Open the file in Drive/Excel to see the full model with updated numbers</li>
             </ol>
           </div>
         )}
@@ -173,84 +177,45 @@ function DAGEditor({ projectId }: Props) {
         </div>
       </div>
 
-      {/* Outputs */}
-      {Object.keys(outputs).length > 0 && (
+      {/* Results — Drive link + summary */}
+      {(driveLink || Object.keys(outputs).length > 0) && (
         <div>
           <h3 className="mb-3 text-lg font-semibold text-gray-900">Results</h3>
 
-          {'construction_loan' in outputs && (
-            <OutputCard title="Construction Loan Parameters" data={outputs.construction_loan as Record<string, unknown>} />
+          {driveLink && (
+            <div className="mb-4 rounded border border-green-200 bg-green-50 p-4">
+              <h4 className="mb-2 font-medium text-green-900">Excel File Ready</h4>
+              <p className="mb-3 text-sm text-green-800">
+                Your model has been calculated and saved to Google Drive. Open it to see all inputs,
+                formulas, calculations, and outputs in the full Excel workbook.
+              </p>
+              <a
+                href={driveLink}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-2 rounded bg-green-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-green-800"
+              >
+                Open in Google Drive
+              </a>
+            </div>
           )}
-          {'permanent_loan' in outputs && (
-            <OutputCard title="Permanent Financing" data={outputs.permanent_loan as Record<string, unknown>} />
-          )}
-          {'budget_summary' in outputs && (
-            <OutputTable title="Budget Summary" rows={outputs.budget_summary as Record<string, unknown>[]} />
-          )}
-          {'sources_and_uses' in outputs && (
-            <OutputTable title="Sources & Uses — Construction" rows={outputs.sources_and_uses as Record<string, unknown>[]} />
-          )}
-          {'annual_summary' in outputs && (
-            <OutputTable title="Annual Operating Summary" rows={outputs.annual_summary as Record<string, unknown>[]} />
+
+          {Object.keys(outputs).length > 0 && (
+            <div className="rounded border bg-white p-4">
+              <h4 className="mb-2 font-medium">Calculation Summary</h4>
+              <div className="grid grid-cols-2 gap-2 text-sm">
+                {Object.entries(outputs).filter(([, v]) => v != null && typeof v !== 'object').map(([k, v]) => (
+                  <div key={k} className="flex justify-between border-b py-1">
+                    <span className="capitalize text-gray-500">{k.replace(/_/g, ' ')}</span>
+                    <span className="font-medium">{String(v)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
           )}
         </div>
       )}
     </div>
-  )
-}
-
-function OutputCard({ title, data }: { title: string; data: Record<string, unknown> }) {
-  return (
-    <div className="mb-4 rounded border bg-white p-4">
-      <h4 className="mb-2 font-medium">{title}</h4>
-      <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-sm">
-        {Object.entries(data).filter(([, v]) => v != null).map(([k, v]) => (
-          <div key={k} className="flex justify-between border-b py-1.5">
-            <span className="capitalize text-gray-500">{k.replace(/_/g, ' ')}</span>
-            <span className="font-medium tabular-nums">
-              {typeof v === 'number' ? (Math.abs(v) >= 1000 ? `$${v.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : v.toLocaleString(undefined, { maximumFractionDigits: 4 })) : String(v)}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-function OutputTable({ title, rows }: { title: string; rows: Record<string, unknown>[] }) {
-  if (!rows || rows.length === 0) return null
-  const cols = Object.keys(rows[0] ?? {})
-  const filtered = rows.filter((r) => Object.values(r).some((v) => v !== null))
-  if (filtered.length === 0) return null
-
-  return (
-    <details className="mb-4 rounded border bg-white" open>
-      <summary className="cursor-pointer border-b px-4 py-3 font-medium hover:bg-gray-50">{title} ({filtered.length} rows)</summary>
-      <div className="overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b bg-gray-50 text-left text-xs font-medium uppercase text-gray-500">
-              {cols.map((c) => <th key={c} className="whitespace-nowrap px-3 py-2">{c.replace(/_/g, ' ')}</th>)}
-            </tr>
-          </thead>
-          <tbody>
-            {filtered.map((row, i) => (
-              <tr key={i} className="border-b last:border-0 hover:bg-gray-50">
-                {cols.map((c) => (
-                  <td key={c} className="whitespace-nowrap px-3 py-1.5 tabular-nums">
-                    {typeof row[c] === 'number'
-                      ? Math.abs(Number(row[c])) >= 100
-                        ? Number(row[c]).toLocaleString(undefined, { maximumFractionDigits: 0 })
-                        : Number(row[c]).toLocaleString(undefined, { maximumFractionDigits: 4 })
-                      : String(row[c] ?? '')}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </details>
   )
 }
 
