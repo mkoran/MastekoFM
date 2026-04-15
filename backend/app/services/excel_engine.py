@@ -148,32 +148,27 @@ def calculate_model(model_bytes: bytes, assumptions: dict[str, Any]) -> dict[str
 
     Returns dict with all calculated outputs.
     """
-    # Try injection + recalculation, fall back to cached values
+    # Step 1: Try injection + LibreOffice recalculation
+    recalced_bytes = None
     try:
         wb = openpyxl.load_workbook(io.BytesIO(model_bytes))
-
         kv_map = assumptions.get("key_values", {})
         if kv_map and "Inputs & Assumptions" in wb.sheetnames:
             count = inject_values(wb, "Inputs & Assumptions", kv_map)
             logger.info("Injected %d/%d values", count, len(kv_map))
-
         for table_inject in assumptions.get("table_injections", []):
             inject_table_data(wb, table_inject["sheet"], table_inject["start_row"],
                               table_inject["columns"], table_inject["rows"])
-
         buf = io.BytesIO()
         wb.save(buf)
-        injected_bytes = buf.getvalue()
         wb.close()
-
-        recalced = recalculate_with_libreoffice(injected_bytes)
-        if recalced:
-            result_wb = openpyxl.load_workbook(io.BytesIO(recalced), data_only=True)
-        else:
-            result_wb = openpyxl.load_workbook(io.BytesIO(model_bytes), data_only=True)
+        recalced_bytes = recalculate_with_libreoffice(buf.getvalue())
     except Exception:
-        logger.exception("Injection failed — using cached values from original file")
-        result_wb = openpyxl.load_workbook(io.BytesIO(model_bytes), data_only=True)
+        logger.exception("Injection/recalc failed")
+
+    # Step 2: Read results — prefer recalculated, fall back to original cached values
+    source = recalced_bytes if recalced_bytes else model_bytes
+    result_wb = openpyxl.load_workbook(io.BytesIO(source), data_only=True)
 
     # Extract outputs
     outputs: dict[str, Any] = {}
