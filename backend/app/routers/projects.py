@@ -104,6 +104,24 @@ async def archive_project(project_id: str, current_user: CurrentUser):
     return _project_to_response(project_id, {**data, **updates})
 
 
+@router.post("/{project_id}/create-drive-folder")
+async def create_drive_folder_for_project(project_id: str, current_user: CurrentUser):
+    """Create a Google Drive folder for a project that doesn't have one yet."""
+    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Project not found")
+    data = doc.to_dict()
+    if data.get("drive_folder_id"):
+        return {"message": "Drive folder already exists", "drive_folder_id": data["drive_folder_id"]}
+
+    folder_id = create_project_folder(data.get("name", "Untitled"))
+    if folder_id:
+        doc_ref.update({"drive_folder_id": folder_id, "updated_at": datetime.now(UTC)})
+        return {"message": "Drive folder created", "drive_folder_id": folder_id}
+    raise HTTPException(status_code=500, detail="Failed to create Drive folder. Check DRIVE_ROOT_FOLDER_ID.")
+
+
 # ─── Checkout endpoints ───
 
 CHECKOUT_DURATION_HOURS = 2

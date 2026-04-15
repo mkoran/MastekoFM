@@ -51,6 +51,9 @@ async def get_model_status(project_id: str, current_user: CurrentUser):
         "model_filename": data.get("model_filename"),
         "calculation_status": data.get("calculation_status", "idle"),
         "last_calculated_at": data.get("last_calculated_at"),
+        "has_drive_folder": bool(data.get("drive_folder_id")),
+        "output_drive_link": data.get("output_drive_link"),
+        "output_filename": data.get("output_filename"),
     }
 
 
