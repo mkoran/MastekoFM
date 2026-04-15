@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 
+import firebase_admin
 from pydantic_settings import BaseSettings
 
 
@@ -30,3 +31,12 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+
+def _init_firebase() -> None:
+    """Initialize Firebase Admin SDK if not already initialized."""
+    if not firebase_admin._apps:
+        firebase_admin.initialize_app()
+
+
+_init_firebase()

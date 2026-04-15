@@ -1,12 +1,24 @@
+let _getToken: (() => string | null) | null = null
+
+export function setTokenGetter(getter: () => string | null) {
+  _getToken = getter
+}
+
 const API_BASE = '/api'
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
+  const token = _getToken?.()
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options?.headers as Record<string, string>),
+  }
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`
+  }
+
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: {
-      'Content-Type': 'application/json',
-      ...options?.headers,
-    },
     ...options,
+    headers,
   })
   if (!response.ok) {
     throw new Error(`API error: ${response.status} ${response.statusText}`)

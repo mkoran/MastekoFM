@@ -3,6 +3,7 @@ import os
 from typing import Any
 
 from fastapi import HTTPException, Request
+from firebase_admin import auth as firebase_auth
 
 
 def get_current_user(request: Request) -> dict[str, Any]:
@@ -13,9 +14,18 @@ def get_current_user(request: Request) -> dict[str, Any]:
 
     token = auth_header.removeprefix("Bearer ")
 
+    # DEV bypass
     if os.getenv("DEV_AUTH_BYPASS", "false").lower() == "true" and token.startswith("dev-"):
         email = token.removeprefix("dev-")
-        return {"uid": f"dev-{email}", "email": email}
+        return {"uid": f"dev-{email}", "email": email, "display_name": email.split("@")[0]}
 
-    # TODO: Firebase Auth token verification (Sprint 1)
-    raise HTTPException(status_code=401, detail="Token verification not yet implemented")
+    # Firebase Auth token verification
+    try:
+        decoded = firebase_auth.verify_id_token(token)
+        return {
+            "uid": decoded["uid"],
+            "email": decoded.get("email", ""),
+            "display_name": decoded.get("name", "") or "",
+        }
+    except Exception as err:
+        raise HTTPException(status_code=401, detail="Invalid or expired token") from err

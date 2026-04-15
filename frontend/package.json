@@ -15,7 +15,8 @@
     "react-router-dom": "^7.1.0",
     "@tanstack/react-table": "^8.21.0",
     "@xyflow/react": "^12.4.0",
-    "recharts": "^2.15.0"
+    "recharts": "^2.15.0",
+    "firebase": "^11.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.0",
