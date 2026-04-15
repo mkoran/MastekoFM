@@ -70,24 +70,44 @@ def recalculate_with_libreoffice(file_bytes: bytes) -> bytes | None:
         return None
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        input_path = os.path.join(tmpdir, "model.xlsx")
+        input_path = os.path.join(tmpdir, "input.xlsx")
         with open(input_path, "wb") as f:
             f.write(file_bytes)
 
         try:
+            # --convert-to forces LibreOffice to parse formulas and write computed values
+            # Use a different output name to avoid overwrite issues
             result = subprocess.run(
-                [lo_path, "--headless", "--calc", "--convert-to", "xlsx", "--outdir", tmpdir, input_path],
+                [lo_path, "--headless", "--calc", "--convert-to", "xlsx:'Calc MS Excel 2007 XML'",
+                 "--outdir", tmpdir, input_path],
                 capture_output=True,
                 timeout=LIBREOFFICE_TIMEOUT,
                 cwd=tmpdir,
+                env={**os.environ, "HOME": tmpdir},  # isolated profile
             )
+
+            logger.info("LibreOffice exit code: %d, stdout: %s", result.returncode, result.stdout.decode()[:200])
             if result.returncode != 0:
-                logger.error("LibreOffice failed: %s", result.stderr.decode())
+                logger.error("LibreOffice stderr: %s", result.stderr.decode()[:500])
                 return None
 
-            output_path = os.path.join(tmpdir, "model.xlsx")
-            with open(output_path, "rb") as f:
-                return f.read()
+            # Output file has same base name as input
+            converted = os.path.join(tmpdir, "input.xlsx")
+            if not os.path.exists(converted):
+                # Sometimes LO names it differently
+                for fname in os.listdir(tmpdir):
+                    if fname.endswith(".xlsx") and fname != "input.xlsx":
+                        converted = os.path.join(tmpdir, fname)
+                        break
+
+            if os.path.exists(converted):
+                with open(converted, "rb") as f:
+                    result_bytes = f.read()
+                logger.info("LibreOffice produced %d bytes", len(result_bytes))
+                return result_bytes
+
+            logger.error("LibreOffice output file not found in %s: %s", tmpdir, os.listdir(tmpdir))
+            return None
 
         except subprocess.TimeoutExpired:
             logger.error("LibreOffice timed out after %ds", LIBREOFFICE_TIMEOUT)
