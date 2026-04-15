@@ -14,7 +14,7 @@ import openpyxl
 
 logger = logging.getLogger(__name__)
 
-LIBREOFFICE_TIMEOUT = 30  # seconds
+LIBREOFFICE_TIMEOUT = 60  # seconds per step (two conversions)
 
 
 def _find_libreoffice() -> str | None:
@@ -75,38 +75,43 @@ def recalculate_with_libreoffice(file_bytes: bytes) -> bytes | None:
             f.write(file_bytes)
 
         try:
-            # --convert-to forces LibreOffice to parse formulas and write computed values
-            # Use a different output name to avoid overwrite issues
-            result = subprocess.run(
-                [lo_path, "--headless", "--calc", "--convert-to", "xlsx:'Calc MS Excel 2007 XML'",
-                 "--outdir", tmpdir, input_path],
-                capture_output=True,
-                timeout=LIBREOFFICE_TIMEOUT,
-                cwd=tmpdir,
-                env={**os.environ, "HOME": tmpdir},  # isolated profile
-            )
+            env = {**os.environ, "HOME": tmpdir}
 
-            logger.info("LibreOffice exit code: %d, stdout: %s", result.returncode, result.stdout.decode()[:200])
-            if result.returncode != 0:
-                logger.error("LibreOffice stderr: %s", result.stderr.decode()[:500])
+            # Step 1: Convert xlsx → ods (forces LibreOffice to fully parse and recalculate)
+            r1 = subprocess.run(
+                [lo_path, "--headless", "--norestore", "--calc", "--convert-to", "ods", "--outdir", tmpdir, input_path],
+                capture_output=True, timeout=LIBREOFFICE_TIMEOUT, cwd=tmpdir, env=env,
+            )
+            logger.info("xlsx→ods: exit=%d", r1.returncode)
+
+            ods_path = os.path.join(tmpdir, "input.ods")
+            if not os.path.exists(ods_path):
+                logger.error("ODS not produced. Dir: %s", os.listdir(tmpdir))
                 return None
 
-            # Output file has same base name as input
-            converted = os.path.join(tmpdir, "input.xlsx")
-            if not os.path.exists(converted):
-                # Sometimes LO names it differently
+            # Step 2: Convert ods → xlsx (writes back with recalculated values cached)
+            r2 = subprocess.run(
+                [lo_path, "--headless", "--norestore", "--calc", "--convert-to", "xlsx", "--outdir", tmpdir, ods_path],
+                capture_output=True, timeout=LIBREOFFICE_TIMEOUT, cwd=tmpdir, env=env,
+            )
+            logger.info("ods→xlsx: exit=%d", r2.returncode)
+
+            # The output is input.xlsx (from input.ods converted)
+            final_path = os.path.join(tmpdir, "input.xlsx")
+            if not os.path.exists(final_path):
+                # Check for alternative names
                 for fname in os.listdir(tmpdir):
-                    if fname.endswith(".xlsx") and fname != "input.xlsx":
-                        converted = os.path.join(tmpdir, fname)
+                    if fname.endswith(".xlsx"):
+                        final_path = os.path.join(tmpdir, fname)
                         break
 
-            if os.path.exists(converted):
-                with open(converted, "rb") as f:
+            if os.path.exists(final_path):
+                with open(final_path, "rb") as f:
                     result_bytes = f.read()
-                logger.info("LibreOffice produced %d bytes", len(result_bytes))
+                logger.info("LibreOffice produced %d bytes (input was %d)", len(result_bytes), len(file_bytes))
                 return result_bytes
 
-            logger.error("LibreOffice output file not found in %s: %s", tmpdir, os.listdir(tmpdir))
+            logger.error("Final xlsx not found. Dir: %s", os.listdir(tmpdir))
             return None
 
         except subprocess.TimeoutExpired:
