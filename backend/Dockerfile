@@ -17,7 +17,7 @@ COPY backend/app/ ./backend/app/
 # === TEST ===
 FROM base AS test
 
-RUN pip install --no-cache-dir pytest ruff
+RUN pip install --no-cache-dir pytest ruff httpx
 
 COPY tests/ ./tests/
 COPY pyproject.toml .

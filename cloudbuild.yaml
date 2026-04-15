@@ -19,6 +19,8 @@ steps:
     args:
       - 'build'
       - '--target=prod'
+      - '-f'
+      - 'backend/Dockerfile'
       - '-t'
       - 'northamerica-northeast1-docker.pkg.dev/$PROJECT_ID/masteko-fm/api:$BUILD_ID'
       - '-t'
@@ -61,7 +63,6 @@ substitutions:
   _SERVICE_NAME: masteko-fm-api-dev
   _ENVIRONMENT: dev
   _VERSION: '1.000'
-  _AUTO_ROLLBACK: 'false'
 
 options:
   logging: CLOUD_LOGGING_ONLY
