@@ -4,7 +4,7 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.app.routers import assumptions, auth, datasources, health, projects, templates
+from backend.app.routers import assumptions, auth, dag, datasources, health, projects, spreadsheets, templates
 
 app = FastAPI(
     title="MastekoFM API",
@@ -29,3 +29,5 @@ app.include_router(projects.router)
 app.include_router(assumptions.router)
 app.include_router(datasources.router)
 app.include_router(templates.router)
+app.include_router(spreadsheets.router)
+app.include_router(dag.router)

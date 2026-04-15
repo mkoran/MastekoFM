@@ -3,6 +3,8 @@ import { useParams } from 'react-router-dom'
 import { api } from '../services/api'
 import AssumptionsTable from './AssumptionsTable'
 import DataSourceConfig from './DataSourceConfig'
+import DAGEditor from './DAGEditor'
+import ReportBuilder from './ReportBuilder'
 
 interface Project {
   id: string
@@ -47,8 +49,8 @@ function ProjectView({ section }: { section?: string }) {
 
       {activeSection === 'assumptions' && projectId && <AssumptionsTable projectId={projectId} />}
       {activeSection === 'datasources' && projectId && <DataSourceConfig projectId={projectId} />}
-      {activeSection === 'dag' && <div className="rounded border-2 border-dashed border-gray-300 p-12 text-center text-gray-500">DAG Editor — Coming in Sprint 3</div>}
-      {activeSection === 'reports' && <div className="rounded border-2 border-dashed border-gray-300 p-12 text-center text-gray-500">Reports — Coming in Sprint 5</div>}
+      {activeSection === 'dag' && projectId && <DAGEditor projectId={projectId} />}
+      {activeSection === 'reports' && projectId && <ReportBuilder projectId={projectId} />}
     </div>
   )
 }
