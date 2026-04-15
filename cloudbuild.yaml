@@ -43,7 +43,7 @@ steps:
       - '--region=northamerica-northeast1'
       - '--platform=managed'
       - '--allow-unauthenticated'
-      - '--set-env-vars=ENVIRONMENT=${_ENVIRONMENT},VERSION=${_VERSION}'
+      - '--set-env-vars=ENVIRONMENT=${_ENVIRONMENT},VERSION=${_VERSION},DEV_AUTH_BYPASS=${_DEV_AUTH_BYPASS},FIRESTORE_PREFIX=${_FIRESTORE_PREFIX}'
 
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     entrypoint: 'bash'
@@ -63,6 +63,8 @@ substitutions:
   _SERVICE_NAME: masteko-fm-api-dev
   _ENVIRONMENT: dev
   _VERSION: '1.000'
+  _DEV_AUTH_BYPASS: 'true'
+  _FIRESTORE_PREFIX: 'dev_'
 
 options:
   logging: CLOUD_LOGGING_ONLY
