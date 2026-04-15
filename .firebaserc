@@ -1,0 +1,18 @@
+{
+  "projects": {
+    "default": "masteko-fm"
+  },
+  "targets": {
+    "masteko-fm": {
+      "hosting": {
+        "dev": [
+          "dev-masteko-fm"
+        ],
+        "prod": [
+          "masteko-fm"
+        ]
+      }
+    }
+  },
+  "etags": {}
+}

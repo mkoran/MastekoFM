@@ -1,0 +1,67 @@
+steps:
+  - name: 'python:3.12-slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install ruff
+        ruff check backend/ tests/
+
+  - name: 'python:3.12-slim'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        pip install -r backend/requirements.txt pytest ruff
+        python -m pytest tests/ -v
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '--target=prod'
+      - '-t'
+      - 'northamerica-northeast1-docker.pkg.dev/$PROJECT_ID/masteko-fm/api:$BUILD_ID'
+      - '-t'
+      - 'northamerica-northeast1-docker.pkg.dev/$PROJECT_ID/masteko-fm/api:latest'
+      - '.'
+
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'northamerica-northeast1-docker.pkg.dev/$PROJECT_ID/masteko-fm/api'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - '${_SERVICE_NAME}'
+      - '--image=northamerica-northeast1-docker.pkg.dev/$PROJECT_ID/masteko-fm/api:$BUILD_ID'
+      - '--region=northamerica-northeast1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--set-env-vars=ENVIRONMENT=${_ENVIRONMENT},VERSION=${_VERSION}'
+
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        SERVICE_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=northamerica-northeast1 --format="value(status.url)")
+        echo "Testing $${SERVICE_URL}/health"
+        STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$${SERVICE_URL}/health")
+        if [ "$$STATUS" != "200" ]; then
+          echo "FAIL: /health returned $$STATUS"
+          exit 1
+        fi
+        echo "PASS: /health returned 200"
+
+substitutions:
+  _SERVICE_NAME: masteko-fm-api-dev
+  _ENVIRONMENT: dev
+  _VERSION: '1.000'
+  _AUTO_ROLLBACK: 'false'
+
+options:
+  logging: CLOUD_LOGGING_ONLY
