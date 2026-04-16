@@ -6,6 +6,9 @@ interface ModelStatus {
   model_filename: string | null
   calculation_status: string
   last_calculated_at: string | null
+  has_drive_folder: boolean
+  output_drive_link: string | null
+  output_filename: string | null
 }
 
 interface CalcResult {
@@ -26,6 +29,7 @@ function DAGEditor({ projectId }: Props) {
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [showMappings, setShowMappings] = useState(false)
   const [mappings, setMappings] = useState<Record<string, string>>({})
+  const [driveFolderId, setDriveFolderId] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
   const modelBase = `/projects/${projectId}/model`
@@ -125,6 +129,52 @@ function DAGEditor({ projectId }: Props) {
             {uploading ? 'Uploading...' : 'Upload Model'}
           </button>
         </div>
+      </div>
+
+      {/* Google Drive Output */}
+      <div className="mb-6 rounded border bg-white p-4">
+        <h3 className="mb-2 font-medium">Google Drive Output</h3>
+        {status?.has_drive_folder ? (
+          <p className="text-sm text-green-700">Drive folder configured. Calculated files will be saved to Google Drive.</p>
+        ) : (
+          <div>
+            <p className="mb-2 text-xs text-gray-500">
+              Paste a Google Drive folder URL or ID. Calculated Excel files will be saved here.
+              Make sure the folder is shared with <code className="bg-gray-100 px-1">560873149926-compute@developer.gserviceaccount.com</code> (Editor).
+            </p>
+            <div className="flex gap-2">
+              <input
+                placeholder="Folder ID or URL (e.g. 1z4lyWMMI1LQPicg2h05v9y0RRKTcfn5A)"
+                value={driveFolderId}
+                onChange={(e) => {
+                  let val = e.target.value.trim()
+                  const match = val.match(/folders\/([a-zA-Z0-9_-]+)/)
+                  if (match) val = match[1] ?? val
+                  setDriveFolderId(val)
+                }}
+                className="flex-1 rounded border px-3 py-1.5 text-sm font-mono"
+              />
+              <button
+                onClick={async () => {
+                  if (!driveFolderId) return
+                  await api.post(`${modelBase}/drive-folder`, { folder_id: driveFolderId })
+                  setMessage({ text: 'Drive folder saved.', type: 'success' })
+                  api.get<ModelStatus>(`${modelBase}/status`).then(setStatus)
+                  setTimeout(() => setMessage(null), 3000)
+                }}
+                className="rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        )}
+        {status?.output_drive_link && (
+          <a href={status.output_drive_link as string} target="_blank" rel="noopener noreferrer"
+            className="mt-2 inline-block text-sm text-blue-600 hover:underline">
+            Last output: {status.output_filename ?? 'Open in Drive'}
+          </a>
+        )}
       </div>
 
       {/* Input Mappings */}

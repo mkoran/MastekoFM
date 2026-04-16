@@ -58,6 +58,22 @@ async def get_model_status(project_id: str, current_user: CurrentUser):
     }
 
 
+@router.post("/drive-folder")
+async def set_drive_folder(project_id: str, body: dict[str, str], current_user: CurrentUser):
+    """Set the Google Drive folder ID for output files.
+
+    Body: {"folder_id": "1abc...xyz"} — the folder ID from the Drive URL.
+    """
+    folder_id = body.get("folder_id", "").strip()
+    if not folder_id:
+        raise HTTPException(status_code=400, detail="folder_id is required")
+    _project_ref(project_id).update({
+        "drive_folder_id": folder_id,
+        "updated_at": datetime.now(UTC),
+    })
+    return {"message": "Drive folder set", "drive_folder_id": folder_id}
+
+
 @router.post("/input-mappings")
 async def set_input_mappings(project_id: str, mappings: dict[str, str], current_user: CurrentUser):
     """Set the mapping from assumption keys to Excel cell references.
