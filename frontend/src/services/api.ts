@@ -11,8 +11,21 @@ export function setGoogleTokenGetter(getter: () => string | null) {
 
 const API_BASE = '/api'
 
+async function waitForToken(maxMs = 3000): Promise<string | null> {
+  // Poll up to maxMs for the token getter to return a non-null value.
+  // This fixes races where a component's initial useEffect fires before
+  // Firebase's onAuthStateChanged has set the token.
+  const start = Date.now()
+  while (Date.now() - start < maxMs) {
+    const t = _getToken?.()
+    if (t) return t
+    await new Promise((r) => setTimeout(r, 50))
+  }
+  return _getToken?.() ?? null
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const token = _getToken?.()
+  const token = await waitForToken()
   // Always read fresh from localStorage to avoid stale closures
   const googleToken = _getGoogleToken?.() || localStorage.getItem('masteko_google_access_token')
   const headers: Record<string, string> = {

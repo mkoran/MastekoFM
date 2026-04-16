@@ -75,21 +75,21 @@ export default function ExcelProjectView() {
   const [uploading, setUploading] = useState(false)
 
   const loadProject = () => {
-    if (!projectId) return
+    if (!projectId || !token) return  // wait until auth token is ready
     api.get<ExcelProject>(`/excel-projects/${projectId}`).then(setProject).catch(() => setProject(null))
     api.get<ScenarioSummary[]>(`/excel-projects/${projectId}/scenarios`).then((s) => {
       setScenarios(s)
       if (s.length > 0 && !selectedId && s[0]) setSelectedId(s[0].id)
     }).catch(() => setScenarios([]))
   }
-  useEffect(loadProject, [projectId])
+  useEffect(loadProject, [projectId, token])
 
   const loadSelected = () => {
-    if (!projectId || !selectedId) return
+    if (!projectId || !selectedId || !token) return
     api.get<ScenarioDetail>(`/excel-projects/${projectId}/scenarios/${selectedId}`).then(setSelected).catch(() => setSelected(null))
     api.get<RunRecord[]>(`/excel-projects/${projectId}/scenarios/${selectedId}/runs`).then(setRuns).catch(() => setRuns([]))
   }
-  useEffect(loadSelected, [projectId, selectedId])
+  useEffect(loadSelected, [projectId, selectedId, token])
 
   const handleCreateScenario = async () => {
     if (!newName) {
