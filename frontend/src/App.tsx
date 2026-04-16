@@ -11,6 +11,9 @@ import TemplatesPage from './pages/TemplatesPage'
 import TemplateGroupsPage from './pages/TemplateGroupsPage'
 import ScenarioEditor from './pages/ScenarioEditor'
 import SettingsPage from './pages/SettingsPage'
+import ExcelTemplatesPage from './pages/ExcelTemplatesPage'
+import ExcelProjectsPage from './pages/ExcelProjectsPage'
+import ExcelProjectView from './pages/ExcelProjectView'
 
 function P({ children }: { children: React.ReactNode }) {
   return <ProtectedRoute><Layout>{children}</Layout></ProtectedRoute>
@@ -31,6 +34,9 @@ function AppRoutes() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route path="/" element={<P><Dashboard /></P>} />
+      <Route path="/excel-templates" element={<P><ExcelTemplatesPage /></P>} />
+      <Route path="/excel-projects" element={<P><ExcelProjectsPage /></P>} />
+      <Route path="/excel-projects/:projectId" element={<P><ExcelProjectView /></P>} />
       <Route path="/templates" element={<P><TemplatesPage /></P>} />
       <Route path="/template-groups" element={<P><TemplateGroupsPage /></P>} />
       <Route path="/template-groups/:groupId" element={<P><TemplateGroupsPage /></P>} />

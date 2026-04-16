@@ -1,7 +1,39 @@
 # MastekoFM — Product Backlog
 
-> Last updated: 2026-04-14
-> Status: Draft — pre-Sprint 0
+> Last updated: 2026-04-16
+> Status: Excel Template MVP shipping on `epic/excel-template-mvp`
+
+## Domain 19: Excel Template MVP (tab-prefix architecture)
+
+| ID | Item | Priority | Sprint | Status |
+|---|---|---|---|---|
+| XT-001 | Excel Template upload + I_/O_/calc classification | P0 | A | shipped |
+| XT-002 | GCS storage_service helper | P0 | A | shipped |
+| XT-003 | excel_template_engine: classify / extract / overlay / validate | P0 | A | shipped |
+| XT-004 | Routers: /api/excel-templates, /api/excel-projects, /api/scenarios | P0 | A | shipped |
+| XT-005 | /api/excel-seed/campus-adele one-shot seed endpoint | P0 | A | shipped |
+| XT-006 | Frontend pages: ExcelTemplates, ExcelProjects, ExcelProjectView | P0 | A | shipped |
+| XT-007 | Hide legacy TGV nav (query flag `?legacy=1` to re-enable) | P0 | A | shipped |
+| XT-008 | 17 new backend tests against real Campus Adele fixture | P0 | A | shipped |
+| XT-009 | Template replace (Option A — new file's tabs overwrite) | P1 | B | shipped (untested on DEV) |
+| XT-010 | Scenario upload: replace inputs file, validate I_-only | P1 | B | shipped (untested on DEV) |
+| XT-011 | Scenario archive (non-destructive) | P1 | B | shipped |
+| XT-012 | Run history per scenario | P1 | B | shipped |
+| XT-013 | Drive integration for Inputs file (edit-in-Drive round-trip) | P1 | C | todo |
+| XT-014 | Warm LibreOffice pool to cut calc latency | P2 | D | todo |
+| XT-015 | Sensitivity sweep: materialize N scenarios from base + deltas | P2 | D | todo |
+
+## Domain 20: Legacy TGV deprecation
+
+| ID | Item | Priority | Sprint | Status |
+|---|---|---|---|---|
+| DEL-001 | Delete legacy TGV code (models, routers, templates/template_groups UI) | P2 | Later | todo |
+| DEL-002 | Firestore migration for existing TGV data (if we care to preserve) | P2 | Later | todo |
+| DEL-003 | Remove `?legacy=1` nav flag once DEL-001 lands | P2 | Later | todo |
+
+---
+
+
 
 ---
 

@@ -6,6 +6,12 @@ import { api } from '../services/api'
 interface NavProject { id: string; name: string }
 interface NavTG { id: string; name: string }
 interface NavTGV { id: string; name: string }
+interface NavExcelProject { id: string; name: string; code_name: string }
+interface NavScenario { id: string; name: string }
+
+// TGV (legacy) nav is hidden by default. Set ?legacy=1 in the URL to re-enable it
+// for historical reference. Backlog item DEL-001 tracks removing TGV entirely.
+const SHOW_LEGACY_TGV = typeof window !== 'undefined' && window.location.search.includes('legacy=1')
 
 const projectNav = [
   { suffix: '', label: 'Assumptions', icon: '\u{1F4CA}' },
@@ -22,14 +28,20 @@ function Layout({ children }: { children: React.ReactNode }) {
   const [projects, setProjects] = useState<NavProject[]>([])
   const [templateGroups, setTemplateGroups] = useState<NavTG[]>([])
   const [scenarios, setScenarios] = useState<NavTGV[]>([])
+  const [excelProjects, setExcelProjects] = useState<NavExcelProject[]>([])
+  const [excelScenarios, setExcelScenarios] = useState<Record<string, NavScenario[]>>({})
   const [expandedProject, setExpandedProject] = useState<string | null>(null)
+  const [expandedExcelProject, setExpandedExcelProject] = useState<string | null>(null)
 
   const isProjectView = !!projectId
   const isActive = (path: string) => location.pathname === path
 
   useEffect(() => {
-    api.get<NavProject[]>('/projects').then(setProjects).catch(() => {})
-    api.get<NavTG[]>('/template-groups').then(setTemplateGroups).catch(() => {})
+    if (SHOW_LEGACY_TGV) {
+      api.get<NavProject[]>('/projects').then(setProjects).catch(() => {})
+      api.get<NavTG[]>('/template-groups').then(setTemplateGroups).catch(() => {})
+    }
+    api.get<NavExcelProject[]>('/excel-projects').then(setExcelProjects).catch(() => {})
   }, [])
 
   useEffect(() => {
@@ -48,6 +60,17 @@ function Layout({ children }: { children: React.ReactNode }) {
     }
   }
 
+  const toggleExcelProject = (pid: string) => {
+    if (expandedExcelProject === pid) {
+      setExpandedExcelProject(null)
+    } else {
+      setExpandedExcelProject(pid)
+      api.get<NavScenario[]>(`/excel-projects/${pid}/scenarios`)
+        .then((s) => setExcelScenarios((prev) => ({ ...prev, [pid]: s })))
+        .catch(() => {})
+    }
+  }
+
   return (
     <div className="flex min-h-screen">
       <aside className="flex w-60 flex-shrink-0 flex-col border-r bg-gray-900 text-white">
@@ -56,11 +79,55 @@ function Layout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3 text-sm">
-          {/* Projects */}
-          <Link to="/" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-            <span className="text-xs">&#9632;</span> Projects
+          {/* Excel Projects (new primary nav) */}
+          <Link to="/excel-projects" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/excel-projects') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+            <span className="text-xs">&#9632;</span> Excel Projects
           </Link>
-          {projects.map((p) => (
+          {excelProjects.map((p) => (
+            <div key={p.id}>
+              <div className="flex items-center">
+                <button onClick={() => toggleExcelProject(p.id)} className="px-2 py-0.5 text-xs text-gray-500 hover:text-white">
+                  {expandedExcelProject === p.id ? '\u25BC' : '\u25B6'}
+                </button>
+                <Link
+                  to={`/excel-projects/${p.id}`}
+                  className={`flex-1 truncate rounded px-1 py-1 text-xs ${isActive(`/excel-projects/${p.id}`) ? 'text-white' : 'text-gray-400 hover:text-white'}`}
+                >
+                  {p.name}
+                </Link>
+              </div>
+              {expandedExcelProject === p.id && (
+                <div className="ml-6 border-l border-gray-700 pl-2">
+                  {(excelScenarios[p.id] || []).map((s) => (
+                    <Link
+                      key={s.id}
+                      to={`/excel-projects/${p.id}`}
+                      className="mb-0.5 block truncate rounded px-2 py-0.5 text-xs text-gray-500 hover:text-gray-300"
+                    >
+                      {s.name}
+                    </Link>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+
+          <Link to="/excel-templates" className={`mt-2 mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/excel-templates') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+            <span className="text-xs">&#9632;</span> Excel Templates
+          </Link>
+
+          <div className="my-3 border-t border-gray-700" />
+
+          {/* Legacy Projects (TGV system) — hidden by default */}
+          {SHOW_LEGACY_TGV && (
+            <>
+              <p className="mb-1 px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Legacy</p>
+              <Link to="/" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+                <span className="text-xs">&#9632;</span> Projects (TGV)
+              </Link>
+            </>
+          )}
+          {SHOW_LEGACY_TGV && projects.map((p) => (
             <div key={p.id}>
               <div className="flex items-center">
                 <button onClick={() => toggleProject(p.id)} className="px-2 py-0.5 text-xs text-gray-500 hover:text-white">
@@ -84,18 +151,22 @@ function Layout({ children }: { children: React.ReactNode }) {
             </div>
           ))}
 
-          <div className="my-3 border-t border-gray-700" />
+          {SHOW_LEGACY_TGV && <div className="my-3 border-t border-gray-700" />}
 
-          {/* Templates */}
-          <Link to="/templates" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/templates') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-            <span className="text-xs">&#9632;</span> Templates
-          </Link>
+          {/* Templates (legacy TGV assumption templates) */}
+          {SHOW_LEGACY_TGV && (
+            <Link to="/templates" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/templates') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+              <span className="text-xs">&#9632;</span> Templates (TGV)
+            </Link>
+          )}
 
-          {/* Template Groups */}
-          <Link to="/template-groups" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/template-groups') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-            <span className="text-xs">&#9632;</span> Template Groups
-          </Link>
-          {templateGroups.map((tg) => (
+          {/* Template Groups (legacy) */}
+          {SHOW_LEGACY_TGV && (
+            <Link to="/template-groups" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/template-groups') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+              <span className="text-xs">&#9632;</span> Template Groups (TGV)
+            </Link>
+          )}
+          {SHOW_LEGACY_TGV && templateGroups.map((tg) => (
             <Link key={tg.id} to={`/template-groups/${tg.id}`}
               className={`mb-0.5 ml-4 block truncate rounded px-2 py-0.5 text-xs ${isActive(`/template-groups/${tg.id}`) ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
               {tg.name}

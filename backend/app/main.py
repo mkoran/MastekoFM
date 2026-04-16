@@ -9,8 +9,12 @@ from backend.app.routers import (
     auth,
     dag,
     datasources,
+    excel_projects,
+    excel_seed,
+    excel_templates,
     health,
     projects,
+    scenarios,
     spreadsheets,
     template_groups,
     templates,
@@ -42,3 +46,8 @@ app.include_router(templates.router)
 app.include_router(spreadsheets.router)
 app.include_router(dag.router)
 app.include_router(template_groups.router)
+# Excel Template MVP (tab-prefix architecture) — I_/O_ tabs, scenarios, calculate
+app.include_router(excel_templates.router)
+app.include_router(excel_projects.router)
+app.include_router(scenarios.router)
+app.include_router(excel_seed.router)
