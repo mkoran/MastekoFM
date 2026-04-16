@@ -26,7 +26,7 @@ async def trigger_calculation(
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    google_token = request.headers.get("X-Google-Access-Token")
+    google_token = request.headers.get("X-MFM-Drive-Token")
     result = run_calculation(project_id, scenario_id=scenario_id, google_access_token=google_token)
     return CalculationResult(**result)
 
@@ -44,7 +44,7 @@ async def batch_calculation(
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    google_token = request.headers.get("X-Google-Access-Token")
+    google_token = request.headers.get("X-MFM-Drive-Token")
     results = []
     for sid in scenario_ids:
         result = run_calculation(project_id, scenario_id=sid, google_access_token=google_token)

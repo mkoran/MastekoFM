@@ -377,21 +377,9 @@ async def test_drive_connection(request: Request, current_user: CurrentUser):
     if not folder_id:
         return {"success": False, "error": "No Drive folder configured. Save a folder ID first."}
 
-    google_token = request.headers.get("X-Google-Access-Token")
-    # Diagnostic: log all header keys (no values) so we can see if the header is being stripped or renamed
-    import logging as _log
-    _log.getLogger(__name__).info(
-        "test-drive header keys: %s  X-Google-Access-Token present=%s len=%s",
-        sorted(request.headers.keys()),
-        google_token is not None,
-        len(google_token) if google_token else 0,
-    )
+    google_token = request.headers.get("X-MFM-Drive-Token")
     if not google_token:
-        return {
-            "success": False,
-            "error": "No Google access token. Sign in with Google (not DEV login) to test Drive access.",
-            "debug_headers_seen": sorted(request.headers.keys()),
-        }
+        return {"success": False, "error": "No Google access token. Sign in with Google (not DEV login) to test Drive access."}
 
     try:
         from backend.app.services.drive_service import _get_drive_service

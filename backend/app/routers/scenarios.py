@@ -151,10 +151,10 @@ async def create_scenario(
 
     Respects `body.storage_kind` if provided; otherwise falls back to the workspace
     default (`/api/settings` → `default_scenario_storage_kind`). Drive storage
-    requires a Google OAuth token in the X-Google-Access-Token header.
+    requires a Google OAuth token in the X-MFM-Drive-Token header.
     """
     proj, tpl = _load_project_and_template(project_id)
-    user_token = request.headers.get("X-Google-Access-Token")
+    user_token = request.headers.get("X-MFM-Drive-Token")
 
     # Decide storage kind
     kind = body.storage_kind or _default_storage_kind()
@@ -303,7 +303,7 @@ async def upload_scenario_file(
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Scenario not found")
     scn = doc.to_dict()
-    user_token = request.headers.get("X-Google-Access-Token")
+    user_token = request.headers.get("X-MFM-Drive-Token")
 
     new_content = await file.read()
     if not new_content:
@@ -395,7 +395,7 @@ async def calculate_scenario(
     if not scn_doc.exists:
         raise HTTPException(status_code=404, detail="Scenario not found")
     scn = scn_doc.to_dict()
-    user_token = request.headers.get("X-Google-Access-Token")
+    user_token = request.headers.get("X-MFM-Drive-Token")
 
     run_ref = _run_ref(project_id, scenario_id).document()
     started_at = datetime.now(UTC)

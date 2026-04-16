@@ -23,7 +23,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers['Authorization'] = `Bearer ${token}`
   }
   if (googleToken) {
-    headers['X-Google-Access-Token'] = googleToken
+    // Custom header intentionally not prefixed X-Google-* — Firebase Hosting's
+    // Fastly edge strips X-Google-* headers before they reach Cloud Run.
+    headers['X-MFM-Drive-Token'] = googleToken
   }
 
   const response = await fetch(`${API_BASE}${path}`, {

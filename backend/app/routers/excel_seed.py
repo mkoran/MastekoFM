@@ -80,12 +80,12 @@ async def seed_campus_adele(
     re-running returns the existing ids rather than duplicating objects.
 
     storage_kind: "gcs" (default) | "drive_xlsx"
-      drive_xlsx requires a Google Sign-In access token (X-Google-Access-Token
+      drive_xlsx requires a Google Sign-In access token (X-MFM-Drive-Token
       header) and a drive_root_folder_id in Settings.
     """
     if storage_kind not in ("gcs", "drive_xlsx"):
         raise HTTPException(status_code=400, detail="storage_kind must be 'gcs' or 'drive_xlsx'")
-    user_token = request.headers.get("X-Google-Access-Token")
+    user_token = request.headers.get("X-MFM-Drive-Token")
     db = get_firestore_client()
     now = datetime.now(UTC)
     result: dict[str, Any] = {"created": [], "existing": [], "storage_kind": storage_kind}
@@ -156,7 +156,7 @@ async def seed_campus_adele(
         if not user_token:
             raise HTTPException(
                 status_code=400,
-                detail="storage_kind=drive_xlsx requires Google Sign-In (send X-Google-Access-Token header).",
+                detail="storage_kind=drive_xlsx requires Google Sign-In (send X-MFM-Drive-Token header).",
             )
         # Resolve the drive root folder from settings (fall back to env).
         settings_doc = db.collection(f"{_prefix()}settings").document("app").get()
