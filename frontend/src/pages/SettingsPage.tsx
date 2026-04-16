@@ -26,11 +26,11 @@ function SettingsPage() {
     setTimeout(() => setSaved(false), 3000)
   }
 
-  const handleTest = async () => {
+  const handleTestGCS = async () => {
     setTesting(true)
     setTestResult(null)
     try {
-      const result = await api.post<{ success: boolean; message?: string; error?: string }>('/settings/test-drive', {})
+      const result = await api.post<{ success: boolean; message?: string; error?: string }>('/settings/test-storage', {})
       setTestResult(result)
     } catch (e) {
       setTestResult({ success: false, error: String(e) })
@@ -45,58 +45,70 @@ function SettingsPage() {
     <div className="p-8">
       <h1 className="mb-6 text-2xl font-bold text-gray-900">Settings</h1>
 
-      <div className="max-w-2xl rounded border bg-white p-6">
-        <h2 className="mb-4 text-lg font-medium">Google Drive Output Folder</h2>
-        <p className="mb-3 text-sm text-gray-600">
-          Set the root Google Drive folder where all project outputs will be saved.
-          Each project gets a subfolder, and each scenario gets a sub-subfolder.
+      {/* Output Storage */}
+      <div className="mb-6 max-w-2xl rounded border bg-white p-6">
+        <h2 className="mb-4 text-lg font-medium">Output File Storage</h2>
+        <p className="mb-4 text-sm text-gray-600">
+          When you calculate a model, the output Excel file is saved to cloud storage
+          and available via the "Download Excel File" button.
         </p>
-        <div className="mb-3 rounded bg-blue-50 p-3 text-xs text-blue-800">
-          <p className="font-medium">Setup:</p>
-          <ol className="mt-1 ml-4 list-decimal space-y-0.5">
-            <li>Create a folder in Google Drive (e.g. "MastekoFM Outputs")</li>
-            <li>Share it with <code className="bg-blue-100 px-1">560873149926-compute@developer.gserviceaccount.com</code> as <strong>Editor</strong></li>
-            <li>Paste the folder URL or ID below</li>
-            <li>Click Save, then Test Connection</li>
-          </ol>
-        </div>
-        <div className="mb-3 flex gap-2">
-          <input
-            value={driveFolderId}
-            onChange={(e) => setDriveFolderId(e.target.value)}
-            placeholder="Folder ID or Drive URL"
-            className="flex-1 rounded border px-3 py-2 font-mono text-sm"
-          />
-          <button onClick={handleSave} className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700">
-            Save
+
+        <div className="mb-4">
+          <button
+            onClick={handleTestGCS}
+            disabled={testing}
+            className="rounded bg-blue-600 px-4 py-2 text-sm text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {testing ? 'Testing...' : 'Test Storage Connection'}
           </button>
         </div>
-        {saved && <p className="mb-3 text-sm text-green-600">Settings saved.</p>}
-
-        <button
-          onClick={handleTest}
-          disabled={testing || !driveFolderId}
-          className="rounded border border-gray-300 px-4 py-2 text-sm text-gray-700 hover:bg-gray-50 disabled:opacity-50"
-        >
-          {testing ? 'Testing...' : 'Test Connection'}
-        </button>
 
         {testResult && (
-          <div className={`mt-3 rounded p-3 text-sm ${testResult.success ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
+          <div className={`mb-4 rounded p-3 text-sm ${testResult.success ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>
             {testResult.success ? (
               <div>
-                <p className="font-medium">Connection successful!</p>
+                <p className="font-medium">Storage connection OK!</p>
                 <p className="mt-1">{testResult.message}</p>
               </div>
             ) : (
               <div>
-                <p className="font-medium">Connection failed</p>
+                <p className="font-medium">Storage test failed</p>
                 <p className="mt-1 break-all">{testResult.error}</p>
-                <p className="mt-2 text-xs">Make sure the folder is shared with the service account as Editor.</p>
               </div>
             )}
           </div>
         )}
+      </div>
+
+      {/* Google Drive (future) */}
+      <div className="max-w-2xl rounded border bg-white p-6">
+        <h2 className="mb-4 text-lg font-medium">Google Drive Integration <span className="rounded bg-yellow-100 px-2 py-0.5 text-xs text-yellow-700">Coming Soon</span></h2>
+        <p className="mb-3 text-sm text-gray-600">
+          Save output files directly to your Google Drive folder. This requires Google Sign-In
+          (not DEV login) so the system can use your credentials to write to your Drive.
+        </p>
+        <div className="mb-3 flex gap-2">
+          <input
+            value={driveFolderId}
+            onChange={(e) => setDriveFolderId(e.target.value)}
+            placeholder="Drive folder ID or URL (for when Google Sign-In is enabled)"
+            className="flex-1 rounded border px-3 py-2 font-mono text-sm"
+          />
+          <button onClick={handleSave} className="rounded bg-gray-600 px-4 py-2 text-sm text-white hover:bg-gray-700">
+            Save
+          </button>
+        </div>
+        {saved && <p className="mb-3 text-sm text-green-600">Drive folder ID saved.</p>}
+
+        <div className="rounded bg-gray-50 p-3 text-xs text-gray-600">
+          <p className="font-medium">Why it doesn't work with DEV Login:</p>
+          <p className="mt-1">
+            Google Drive requires your personal OAuth credentials to upload files to your folder.
+            The service account on Cloud Run doesn't have Drive storage quota for personal Gmail accounts.
+            Once Google Sign-In is enabled in Firebase Auth, the system will use your Google token to
+            upload directly to your Drive.
+          </p>
+        </div>
       </div>
     </div>
   )

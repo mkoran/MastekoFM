@@ -333,6 +333,31 @@ async def update_settings(body: dict[str, Any], current_user: CurrentUser):
     return {"message": "Settings updated"}
 
 
+@router.post("/api/settings/test-storage")
+async def test_storage_connection(current_user: CurrentUser):
+    """Test that Cloud Storage is accessible for output files."""
+    try:
+        from google.cloud import storage as gcs
+
+        client = gcs.Client(project=settings.gcp_project)
+        bucket = client.bucket("masteko-fm-outputs")
+
+        # Write test
+        blob = bucket.blob("_connection_test.txt")
+        blob.upload_from_string(b"MastekoFM storage test", content_type="text/plain")
+
+        # Delete test
+        blob.delete()
+
+        return {
+            "success": True,
+            "message": "Cloud Storage OK. Bucket 'masteko-fm-outputs' is writable. Output files will be available for download after calculation.",
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e)}
+
+
 @router.post("/api/settings/test-drive")
 async def test_drive_connection(current_user: CurrentUser):
     """Test that the configured Drive folder is accessible.
