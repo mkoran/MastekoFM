@@ -1,4 +1,4 @@
-"""DAG execution service — inject assumptions into Excel, recalculate, save output."""
+"""DAG execution service — inject scenario values into Excel, recalculate, save output."""
 import base64
 import io
 import logging
@@ -23,21 +23,42 @@ def get_model_file(project_id: str) -> bytes | None:
     doc = _get_project_ref(project_id).get()
     if not doc.exists:
         return None
-    data = doc.to_dict()
-    model_b64 = data.get("model_file_b64")
-    if model_b64:
-        return base64.b64decode(model_b64)
-    return None
+    model_b64 = doc.to_dict().get("model_file_b64")
+    return base64.b64decode(model_b64) if model_b64 else None
 
 
-def get_assumptions_as_cell_map(project_id: str) -> dict[str, Any]:
-    """Collect all key-value assumptions and map to Excel cell references."""
+def get_cell_map_from_scenario(project_id: str, scenario_id: str) -> dict[str, Any]:
+    """Get assumption values from a TGV (scenario) mapped to Excel cells."""
+    db = get_firestore_client()
+    prefix = settings.firestore_collection_prefix
+
+    # Get input mappings from project
+    project_data = _get_project_ref(project_id).get().to_dict() or {}
+    input_mappings = project_data.get("input_mappings", {})
+
+    # Get scenario values
+    tgv_doc = db.collection(f"{prefix}projects").document(project_id).collection("tgv").document(scenario_id).get()
+    if not tgv_doc.exists:
+        return {}
+    tgv = tgv_doc.to_dict()
+    values = tgv.get("values", {})
+
+    # Map assumption keys → cell references
+    cell_map: dict[str, Any] = {}
+    for key, value in values.items():
+        if key in input_mappings and value is not None:
+            cell_map[input_mappings[key]] = value
+
+    return cell_map
+
+
+def get_cell_map_from_assumptions(project_id: str) -> dict[str, Any]:
+    """Get assumption values from legacy per-project assumptions mapped to cells."""
     db = get_firestore_client()
     prefix = settings.firestore_collection_prefix
     assumptions_ref = db.collection(f"{prefix}projects").document(project_id).collection("assumptions")
 
-    project_doc = _get_project_ref(project_id).get()
-    project_data = project_doc.to_dict() if project_doc.exists else {}
+    project_data = _get_project_ref(project_id).get().to_dict() or {}
     input_mappings = project_data.get("input_mappings", {})
 
     cell_map: dict[str, Any] = {}
@@ -51,17 +72,22 @@ def get_assumptions_as_cell_map(project_id: str) -> dict[str, Any]:
     return cell_map
 
 
-def run_calculation(project_id: str) -> dict[str, Any]:
-    """Run the full calculation pipeline:
+def _get_app_drive_folder() -> str | None:
+    """Get the app-level Drive root folder from settings."""
+    prefix = settings.firestore_collection_prefix
+    doc = get_firestore_client().collection(f"{prefix}settings").document("app").get()
+    if doc.exists:
+        return doc.to_dict().get("drive_root_folder_id")
+    return settings.drive_root_folder_id or None
 
-    1. Load the .xlsx template
-    2. Inject assumption values into mapped cells
-    3. Recalculate with LibreOffice (if available)
-    4. Save the completed .xlsx to Google Drive
-    5. Return the Drive file link
 
-    The output IS the Excel file — all inputs, formulas, and calculated
-    outputs are in the workbook. Users open it in Drive/Excel to see results.
+def run_calculation(project_id: str, scenario_id: str | None = None) -> dict[str, Any]:
+    """Run the full calculation pipeline.
+
+    If scenario_id is provided, uses that TGV's values.
+    Otherwise falls back to legacy per-project assumptions.
+
+    Output folder: <ProjectCode>/<TGVCode>/YYYYMMDDHHMM_<ProjectCode>_<TGVCode>/
     """
     model_bytes = get_model_file(project_id)
     if not model_bytes:
@@ -71,76 +97,84 @@ def run_calculation(project_id: str) -> dict[str, Any]:
     _get_project_ref(project_id).update({"calculation_status": "calculating", "updated_at": now})
 
     try:
-        # Load workbook (preserve formulas for injection)
-        wb = openpyxl.load_workbook(io.BytesIO(model_bytes))
+        # Get project info
+        project_data = _get_project_ref(project_id).get().to_dict() or {}
+        project_name = project_data.get("name", "model")
+        project_code = project_data.get("code_name") or project_name.replace(" ", "_")[:20]
 
-        # Inject key-value assumptions
-        cell_map = get_assumptions_as_cell_map(project_id)
+        # Get scenario info if provided
+        scenario_name = None
+        scenario_code = None
+        if scenario_id:
+            prefix = settings.firestore_collection_prefix
+            tgv_doc = get_firestore_client().collection(f"{prefix}projects").document(project_id).collection("tgv").document(scenario_id).get()
+            if tgv_doc.exists:
+                tgv = tgv_doc.to_dict()
+                scenario_name = tgv.get("name", "")
+                scenario_code = tgv.get("code_name") or scenario_name.replace(" ", "_")[:20]
+
+        # Get cell map from scenario or legacy assumptions
+        if scenario_id:
+            cell_map = get_cell_map_from_scenario(project_id, scenario_id)
+        else:
+            cell_map = get_cell_map_from_assumptions(project_id)
+
+        # Load workbook and inject
+        wb = openpyxl.load_workbook(io.BytesIO(model_bytes))
         if cell_map and "Inputs & Assumptions" in wb.sheetnames:
             count = inject_values(wb, "Inputs & Assumptions", cell_map)
-            logger.info("Injected %d/%d assumption values", count, len(cell_map))
+            logger.info("Injected %d/%d values", count, len(cell_map))
 
-        # Save injected workbook
         buf = io.BytesIO()
         wb.save(buf)
-        injected_bytes = buf.getvalue()
         wb.close()
 
-        # Recalculate with LibreOffice
-        recalced_bytes = recalculate_with_libreoffice(injected_bytes)
-        final_bytes = recalced_bytes if recalced_bytes else injected_bytes
+        # Recalculate
+        recalced_bytes = recalculate_with_libreoffice(buf.getvalue())
+        final_bytes = recalced_bytes if recalced_bytes else buf.getvalue()
 
-        # Get project info for filename
-        project_doc = _get_project_ref(project_id).get()
-        project_data = project_doc.to_dict() if project_doc.exists else {}
-        project_name = project_data.get("name", "model")
+        # Store output for download
+        _get_project_ref(project_id).update({
+            "output_file_b64": base64.b64encode(final_bytes).decode(),
+        })
 
-        # Upload to Cloud Storage (public bucket for easy download)
+        # Upload to GCS with folder structure
         download_link = None
         upload_error = None
         try:
             from google.cloud import storage as gcs
 
-            timestamp = now.strftime("%Y%m%d_%H%M")
-            safe_name = project_name.replace(" ", "_").replace("/", "_")
-            blob_name = f"{safe_name}/{safe_name}_Model_{timestamp}.xlsx"
+            timestamp = now.strftime("%Y%m%d%H%M")
+            safe_project = project_code.replace(" ", "_").replace("/", "_")
+
+            if scenario_code:
+                safe_scenario = scenario_code.replace(" ", "_").replace("/", "_")
+                blob_name = f"{safe_project}/{safe_scenario}/{timestamp}_{safe_project}_{safe_scenario}/model.xlsx"
+            else:
+                blob_name = f"{safe_project}/{timestamp}_{safe_project}/model.xlsx"
 
             client = gcs.Client(project=settings.gcp_project)
             bucket = client.bucket("masteko-fm-outputs")
             blob = bucket.blob(blob_name)
-            blob.content_disposition = f'attachment; filename="{safe_name}_Model_{timestamp}.xlsx"'
-            blob.upload_from_string(
-                final_bytes,
-                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
+            blob.content_disposition = f'attachment; filename="{project_name} - {scenario_name or "Model"}.xlsx"'
+            blob.upload_from_string(final_bytes, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
             download_link = f"https://storage.googleapis.com/masteko-fm-outputs/{blob_name}"
             logger.info("Uploaded to GCS: %s", download_link)
-
-            # Also upload as "latest" for easy access
-            latest_blob = bucket.blob(f"{safe_name}/latest.xlsx")
-            latest_blob.content_disposition = f'attachment; filename="{safe_name}_Latest.xlsx"'
-            latest_blob.upload_from_string(
-                final_bytes,
-                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
         except Exception as e:
             upload_error = str(e)
             logger.warning("GCS upload failed: %s", e)
 
-        # Store the output file for download
-        _get_project_ref(project_id).update({
-            "output_file_b64": base64.b64encode(final_bytes).decode(),
-        })
-
-        # Update project with calculation results
+        # Update project
         _get_project_ref(project_id).update({
             "calculation_status": "done",
             "last_calculated_at": now,
             "output_download_url": download_link or f"/api/projects/{project_id}/model/download",
             "output_drive_link": download_link,
-            "output_filename": f"{project_name} - Model.xlsx",
+            "output_filename": f"{project_name} - {scenario_name or 'Model'}.xlsx",
             "calculation_used_libreoffice": recalced_bytes is not None,
             "assumptions_injected": len(cell_map),
+            "last_scenario_id": scenario_id,
+            "last_scenario_name": scenario_name,
             "updated_at": now,
         })
 
@@ -151,7 +185,8 @@ def run_calculation(project_id: str) -> dict[str, Any]:
             "outputs": {
                 "download_url": download_link or f"/api/projects/{project_id}/model/download",
                 "drive_link": download_link,
-                "filename": f"{project_name} - Model.xlsx",
+                "filename": f"{project_name} - {scenario_name or 'Model'}.xlsx",
+                "scenario_name": scenario_name,
                 "libreoffice_used": recalced_bytes is not None,
                 "assumptions_injected": len(cell_map),
                 "file_size_kb": round(len(final_bytes) / 1024, 1),

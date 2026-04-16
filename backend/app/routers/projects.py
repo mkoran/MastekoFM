@@ -27,10 +27,12 @@ def _project_to_response(doc_id: str, data: dict[str, Any]) -> ProjectResponse:
 async def create_project(body: ProjectCreate, current_user: CurrentUser):
     """Create a new project."""
     now = datetime.now(UTC)
-    project_data = {
+    project_data: dict[str, Any] = {
         "name": body.name,
+        "code_name": body.code_name or body.name.replace(" ", "_")[:20],
         "owner_uid": current_user["uid"],
         "status": "active",
+        "template_group_id": body.template_group_id,
         "checkout": {},
         "created_at": now,
         "updated_at": now,
@@ -84,6 +86,10 @@ async def update_project(project_id: str, body: ProjectUpdate, current_user: Cur
     updates: dict[str, Any] = {"updated_at": datetime.now(UTC)}
     if body.name is not None:
         updates["name"] = body.name
+    if body.code_name is not None:
+        updates["code_name"] = body.code_name
+    if body.template_group_id is not None:
+        updates["template_group_id"] = body.template_group_id
     doc_ref.update(updates)
     return _project_to_response(project_id, {**data, **updates})
 
