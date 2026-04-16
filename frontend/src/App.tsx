@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route } from 'react-router-dom'
 import { useEffect } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
-import { setTokenGetter } from './services/api'
+import { setTokenGetter, setGoogleTokenGetter } from './services/api'
 import ProtectedRoute from './components/ProtectedRoute'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
@@ -17,11 +17,15 @@ function P({ children }: { children: React.ReactNode }) {
 }
 
 function AppRoutes() {
-  const { token } = useAuth()
+  const { token, googleAccessToken } = useAuth()
 
   useEffect(() => {
     setTokenGetter(() => token)
   }, [token])
+
+  useEffect(() => {
+    setGoogleTokenGetter(() => googleAccessToken)
+  }, [googleAccessToken])
 
   return (
     <Routes>

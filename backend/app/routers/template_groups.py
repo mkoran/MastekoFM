@@ -2,7 +2,7 @@
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
@@ -359,11 +359,8 @@ async def test_storage_connection(current_user: CurrentUser):
 
 
 @router.post("/api/settings/test-drive")
-async def test_drive_connection(current_user: CurrentUser):
-    """Test that the configured Drive folder is accessible.
-
-    Creates a small test file, verifies it uploads, then deletes it.
-    """
+async def test_drive_connection(request: Request, current_user: CurrentUser):
+    """Test Drive folder access using the user's Google token."""
     prefix = settings.firestore_collection_prefix
     doc = get_firestore_client().collection(f"{prefix}settings").document("app").get()
     folder_id = doc.to_dict().get("drive_root_folder_id") if doc.exists else settings.drive_root_folder_id
@@ -371,40 +368,41 @@ async def test_drive_connection(current_user: CurrentUser):
     if not folder_id:
         return {"success": False, "error": "No Drive folder configured. Save a folder ID first."}
 
+    google_token = request.headers.get("X-Google-Access-Token")
+    if not google_token:
+        return {"success": False, "error": "No Google access token. Sign in with Google (not DEV login) to test Drive access."}
+
     try:
         from backend.app.services.drive_service import _get_drive_service
 
-        service = _get_drive_service()
+        service = _get_drive_service(user_access_token=google_token)
 
-        # Try to list files in the folder (read test)
+        # Read test
         results = service.files().list(
             q=f"'{folder_id}' in parents and trashed = false",
             fields="files(id, name)",
-            pageSize=1,
+            pageSize=5,
             supportsAllDrives=True,
         ).execute()
-
         file_count = len(results.get("files", []))
 
-        # Try to create a test file (write test)
+        # Write test
         from googleapiclient.http import MediaInMemoryUpload
 
-        test_content = b"MastekoFM Drive connection test"
-        media = MediaInMemoryUpload(test_content, mimetype="text/plain")
+        media = MediaInMemoryUpload(b"MastekoFM Drive test", mimetype="text/plain")
         test_file = service.files().create(
             body={"name": "_masteko_test.txt", "parents": [folder_id]},
             media_body=media,
             fields="id",
             supportsAllDrives=True,
         ).execute()
-        test_file_id = test_file["id"]
 
-        # Delete the test file
-        service.files().delete(fileId=test_file_id, supportsAllDrives=True).execute()
+        # Delete test
+        service.files().delete(fileId=test_file["id"], supportsAllDrives=True).execute()
 
         return {
             "success": True,
-            "message": f"Drive connection OK. Folder accessible ({file_count} existing files). Write test passed.",
+            "message": f"Drive connection OK! Folder has {file_count} files. Read + write + delete all working.",
             "folder_id": folder_id,
         }
 

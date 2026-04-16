@@ -81,7 +81,7 @@ def _get_app_drive_folder() -> str | None:
     return settings.drive_root_folder_id or None
 
 
-def run_calculation(project_id: str, scenario_id: str | None = None) -> dict[str, Any]:
+def run_calculation(project_id: str, scenario_id: str | None = None, google_access_token: str | None = None) -> dict[str, Any]:
     """Run the full calculation pipeline.
 
     If scenario_id is provided, uses that TGV's values.
@@ -138,31 +138,63 @@ def run_calculation(project_id: str, scenario_id: str | None = None) -> dict[str
             "output_file_b64": base64.b64encode(final_bytes).decode(),
         })
 
-        # Upload to GCS with folder structure
+        # Upload to Google Drive (using user's token) or GCS (fallback)
+        from backend.app.services.drive_service import create_project_folder, upload_file
+
         download_link = None
+        drive_link = None
         upload_error = None
-        try:
-            from google.cloud import storage as gcs
+        timestamp = now.strftime("%Y%m%d%H%M")
 
-            timestamp = now.strftime("%Y%m%d%H%M")
-            safe_project = project_code.replace(" ", "_").replace("/", "_")
+        # Get Drive root folder from app settings
+        drive_root = _get_app_drive_folder()
 
-            if scenario_code:
-                safe_scenario = scenario_code.replace(" ", "_").replace("/", "_")
-                blob_name = f"{safe_project}/{safe_scenario}/{timestamp}_{safe_project}_{safe_scenario}/model.xlsx"
-            else:
-                blob_name = f"{safe_project}/{timestamp}_{safe_project}/model.xlsx"
+        if google_access_token and drive_root:
+            # Upload to Drive using user's credentials
+            try:
+                # Ensure project folder exists
+                drive_folder_id = project_data.get("drive_folder_id")
+                if not drive_folder_id:
+                    drive_folder_id = create_project_folder(project_name, user_access_token=google_access_token)
+                    if drive_folder_id:
+                        _get_project_ref(project_id).update({"drive_folder_id": drive_folder_id})
 
-            client = gcs.Client(project=settings.gcp_project)
-            bucket = client.bucket("masteko-fm-outputs")
-            blob = bucket.blob(blob_name)
-            blob.content_disposition = f'attachment; filename="{project_name} - {scenario_name or "Model"}.xlsx"'
-            blob.upload_from_string(final_bytes, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-            download_link = f"https://storage.googleapis.com/masteko-fm-outputs/{blob_name}"
-            logger.info("Uploaded to GCS: %s", download_link)
-        except Exception as e:
-            upload_error = str(e)
-            logger.warning("GCS upload failed: %s", e)
+                if drive_folder_id:
+                    safe_scenario = (scenario_code or "model").replace(" ", "_")
+                    filename = f"{timestamp}_{project_code}_{safe_scenario}.xlsx"
+                    file_id = upload_file(
+                        drive_folder_id, filename, final_bytes,
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        user_access_token=google_access_token,
+                    )
+                    if file_id:
+                        drive_link = f"https://drive.google.com/file/d/{file_id}/view"
+                        download_link = drive_link
+                        logger.info("Uploaded to Drive: %s", drive_link)
+            except Exception as e:
+                upload_error = f"Drive: {e}"
+                logger.warning("Drive upload failed: %s", e)
+
+        # Fallback: upload to GCS
+        if not download_link:
+            try:
+                from google.cloud import storage as gcs
+
+                safe_project = project_code.replace(" ", "_").replace("/", "_")
+                safe_scenario = (scenario_code or "model").replace(" ", "_").replace("/", "_")
+                blob_name = f"{safe_project}/{safe_scenario}/{timestamp}_{safe_project}_{safe_scenario}.xlsx"
+
+                client = gcs.Client(project=settings.gcp_project)
+                bucket = client.bucket("masteko-fm-outputs")
+                blob = bucket.blob(blob_name)
+                blob.content_disposition = f'attachment; filename="{project_name} - {scenario_name or "Model"}.xlsx"'
+                blob.upload_from_string(final_bytes, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                download_link = f"https://storage.googleapis.com/masteko-fm-outputs/{blob_name}"
+                logger.info("Uploaded to GCS: %s", download_link)
+            except Exception as e2:
+                if not upload_error:
+                    upload_error = str(e2)
+                logger.warning("GCS upload also failed: %s", e2)
 
         # Update project
         _get_project_ref(project_id).update({

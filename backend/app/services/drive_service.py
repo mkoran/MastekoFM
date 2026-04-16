@@ -3,6 +3,7 @@ import io
 import logging
 
 from google.auth import default
+from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 
@@ -11,20 +12,27 @@ from backend.app.config import settings
 logger = logging.getLogger(__name__)
 
 
-def _get_drive_service():
-    """Get authenticated Drive API service."""
-    creds, _ = default(scopes=["https://www.googleapis.com/auth/drive"])
+def _get_drive_service(user_access_token: str | None = None):
+    """Get authenticated Drive API service.
+
+    If user_access_token is provided, uses the user's Google OAuth token
+    (needed for personal Gmail Drive access). Otherwise uses the SA.
+    """
+    if user_access_token:
+        creds = Credentials(token=user_access_token)
+    else:
+        creds, _ = default(scopes=["https://www.googleapis.com/auth/drive"])
     return build("drive", "v3", credentials=creds, cache_discovery=False)
 
 
-def create_project_folder(project_name: str) -> str | None:
+def create_project_folder(project_name: str, user_access_token: str | None = None) -> str | None:
     """Create a project folder in Google Drive under MastekoFM root."""
     root_folder_id = settings.drive_root_folder_id
     if not root_folder_id:
         logger.warning("DRIVE_ROOT_FOLDER_ID not set — skipping folder creation")
         return None
 
-    service = _get_drive_service()
+    service = _get_drive_service(user_access_token)
     try:
         project_folder = service.files().create(
             body={
@@ -56,13 +64,13 @@ def create_project_folder(project_name: str) -> str | None:
         raise
 
 
-def upload_file(folder_id: str, filename: str, content: bytes, mime_type: str) -> str | None:
+def upload_file(folder_id: str, filename: str, content: bytes, mime_type: str, user_access_token: str | None = None) -> str | None:
     """Upload a file to a Google Drive folder. Returns file ID.
 
     Uses supportsAllDrives=True for Shared Drive compatibility.
     """
     try:
-        service = _get_drive_service()
+        service = _get_drive_service(user_access_token)
         media = MediaIoBaseUpload(io.BytesIO(content), mimetype=mime_type, resumable=False)
         result = service.files().create(
             body={"name": filename, "parents": [folder_id]},
