@@ -331,3 +331,57 @@ async def update_settings(body: dict[str, Any], current_user: CurrentUser):
         updates["drive_root_folder_id"] = body["drive_root_folder_id"]
     doc_ref.set(updates, merge=True)
     return {"message": "Settings updated"}
+
+
+@router.post("/api/settings/test-drive")
+async def test_drive_connection(current_user: CurrentUser):
+    """Test that the configured Drive folder is accessible.
+
+    Creates a small test file, verifies it uploads, then deletes it.
+    """
+    prefix = settings.firestore_collection_prefix
+    doc = get_firestore_client().collection(f"{prefix}settings").document("app").get()
+    folder_id = doc.to_dict().get("drive_root_folder_id") if doc.exists else settings.drive_root_folder_id
+
+    if not folder_id:
+        return {"success": False, "error": "No Drive folder configured. Save a folder ID first."}
+
+    try:
+        from backend.app.services.drive_service import _get_drive_service
+
+        service = _get_drive_service()
+
+        # Try to list files in the folder (read test)
+        results = service.files().list(
+            q=f"'{folder_id}' in parents and trashed = false",
+            fields="files(id, name)",
+            pageSize=1,
+            supportsAllDrives=True,
+        ).execute()
+
+        file_count = len(results.get("files", []))
+
+        # Try to create a test file (write test)
+        from googleapiclient.http import MediaInMemoryUpload
+
+        test_content = b"MastekoFM Drive connection test"
+        media = MediaInMemoryUpload(test_content, mimetype="text/plain")
+        test_file = service.files().create(
+            body={"name": "_masteko_test.txt", "parents": [folder_id]},
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True,
+        ).execute()
+        test_file_id = test_file["id"]
+
+        # Delete the test file
+        service.files().delete(fileId=test_file_id, supportsAllDrives=True).execute()
+
+        return {
+            "success": True,
+            "message": f"Drive connection OK. Folder accessible ({file_count} existing files). Write test passed.",
+            "folder_id": folder_id,
+        }
+
+    except Exception as e:
+        return {"success": False, "error": str(e), "folder_id": folder_id}
