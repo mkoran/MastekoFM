@@ -115,11 +115,16 @@ async def create_drive_folder_for_project(project_id: str, current_user: Current
     if data.get("drive_folder_id"):
         return {"message": "Drive folder already exists", "drive_folder_id": data["drive_folder_id"]}
 
-    folder_id = create_project_folder(data.get("name", "Untitled"))
-    if folder_id:
-        doc_ref.update({"drive_folder_id": folder_id, "updated_at": datetime.now(UTC)})
-        return {"message": "Drive folder created", "drive_folder_id": folder_id}
-    raise HTTPException(status_code=500, detail="Failed to create Drive folder. Check DRIVE_ROOT_FOLDER_ID.")
+    try:
+        folder_id = create_project_folder(data.get("name", "Untitled"))
+        if folder_id:
+            doc_ref.update({"drive_folder_id": folder_id, "updated_at": datetime.now(UTC)})
+            return {"message": "Drive folder created", "drive_folder_id": folder_id}
+        raise HTTPException(status_code=500, detail="Drive folder creation returned None. Check DRIVE_ROOT_FOLDER_ID env var and SA permissions.")
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Drive error: {e}") from e
 
 
 # ─── Checkout endpoints ───

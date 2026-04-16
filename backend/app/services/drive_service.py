@@ -24,8 +24,8 @@ def create_project_folder(project_name: str) -> str | None:
         logger.warning("DRIVE_ROOT_FOLDER_ID not set — skipping folder creation")
         return None
 
+    service = _get_drive_service()
     try:
-        service = _get_drive_service()
         project_folder = service.files().create(
             body={
                 "name": project_name,
