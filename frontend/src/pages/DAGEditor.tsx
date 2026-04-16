@@ -73,10 +73,10 @@ function DAGEditor({ projectId }: Props) {
       const result = await api.post<CalcResult>(`/projects/${projectId}/calculate`, {})
       if (result.success) {
         const out = result.outputs as Record<string, unknown>
-        const link = out.drive_link as string | null
-        setDriveLink(link)
+        const downloadUrl = out.download_url as string | null
+        setDriveLink(downloadUrl)
         setOutputs(out)
-        setMessage({ text: link ? 'Calculation complete! Excel file saved to Google Drive.' : 'Calculation complete (Drive not configured — set DRIVE_ROOT_FOLDER_ID).', type: 'success' })
+        setMessage({ text: 'Calculation complete! Download your Excel file below.', type: 'success' })
         api.get<ModelStatus>(`${modelBase}/status`).then(setStatus)
       } else {
         setMessage({ text: `Calculation failed: ${result.errors.join(', ')}`, type: 'error' })

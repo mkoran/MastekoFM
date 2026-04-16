@@ -1,4 +1,4 @@
-"""DAG execution service — inject assumptions into Excel, recalculate, save to Drive."""
+"""DAG execution service — inject assumptions into Excel, recalculate, save output."""
 import base64
 import io
 import logging
@@ -8,7 +8,6 @@ from typing import Any
 import openpyxl
 
 from backend.app.config import get_firestore_client, settings
-from backend.app.services.drive_service import upload_file
 from backend.app.services.excel_engine import inject_values, recalculate_with_libreoffice
 
 logger = logging.getLogger(__name__)
@@ -95,26 +94,45 @@ def run_calculation(project_id: str) -> dict[str, Any]:
         project_doc = _get_project_ref(project_id).get()
         project_data = project_doc.to_dict() if project_doc.exists else {}
         project_name = project_data.get("name", "model")
-        drive_folder_id = project_data.get("drive_folder_id")
 
-        # Save to Google Drive (best-effort — calculation still succeeds if Drive fails)
-        drive_file_id = None
-        drive_link = None
-        drive_error = None
-        if drive_folder_id:
-            timestamp = now.strftime("%Y%m%d_%H%M")
-            filename = f"{project_name} - Model {timestamp}.xlsx"
+        # Upload to Cloud Storage for download
+        gcs_url = None
+        upload_error = None
+        try:
+            from google.cloud import storage as gcs
+
+            timestamp = now.strftime("%Y%m%d_%H%M%S")
+            blob_name = f"projects/{project_id}/{project_name} - Model {timestamp}.xlsx"
+            bucket_name = "masteko-fm-outputs"
+
+            client = gcs.Client(project=settings.gcp_project)
+            bucket = client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            blob.upload_from_string(final_bytes, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+            # Generate a signed URL (valid for 7 days)
+            gcs_url = blob.generate_signed_url(expiration=datetime.now(UTC).replace(day=datetime.now(UTC).day + 7), version="v4")
+            # Fallback: public URL if signed URL fails
+            if not gcs_url:
+                gcs_url = f"https://storage.googleapis.com/{bucket_name}/{blob_name}"
+            logger.info("Uploaded model to GCS: %s", blob_name)
+        except Exception as e:
+            upload_error = str(e)
+            logger.warning("GCS upload failed: %s", e)
+            # Try simpler public URL approach
             try:
-                drive_file_id = upload_file(
-                    drive_folder_id, filename, final_bytes,
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-                if drive_file_id:
-                    drive_link = f"https://docs.google.com/spreadsheets/d/{drive_file_id}"
-                    logger.info("Saved model to Drive: %s", drive_link)
-            except Exception as e:
-                drive_error = str(e)
-                logger.warning("Drive upload failed (calculation still succeeded): %s", e)
+                from google.cloud import storage as gcs
+
+                client = gcs.Client(project=settings.gcp_project)
+                bucket = client.bucket("masteko-fm-outputs")
+                blob = bucket.blob(f"projects/{project_id}/latest.xlsx")
+                blob.upload_from_string(final_bytes, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                gcs_url = f"/api/projects/{project_id}/model/download"
+                upload_error = None
+                logger.info("Fallback: uploaded to GCS as latest.xlsx")
+            except Exception as e2:
+                upload_error = f"GCS upload failed: {e2}"
+                logger.warning("GCS fallback also failed: %s", e2)
 
         # Store the output file for download
         _get_project_ref(project_id).update({
@@ -125,8 +143,8 @@ def run_calculation(project_id: str) -> dict[str, Any]:
         _get_project_ref(project_id).update({
             "calculation_status": "done",
             "last_calculated_at": now,
-            "output_drive_file_id": drive_file_id,
-            "output_drive_link": drive_link,
+            "output_download_url": gcs_url or f"/api/projects/{project_id}/model/download",
+            "output_drive_link": gcs_url,
             "output_filename": f"{project_name} - Model.xlsx",
             "calculation_used_libreoffice": recalced_bytes is not None,
             "assumptions_injected": len(cell_map),
@@ -136,11 +154,9 @@ def run_calculation(project_id: str) -> dict[str, Any]:
         return {
             "success": True,
             "nodes_calculated": 1,
-            "errors": [f"Drive upload: {drive_error}"] if drive_error else [],
+            "errors": [upload_error] if upload_error else [],
             "outputs": {
-                "drive_link": drive_link,
-                "drive_file_id": drive_file_id,
-                "drive_error": drive_error,
+                "download_url": gcs_url or f"/api/projects/{project_id}/model/download",
                 "filename": f"{project_name} - Model.xlsx",
                 "libreoffice_used": recalced_bytes is not None,
                 "assumptions_injected": len(cell_map),
