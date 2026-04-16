@@ -51,7 +51,7 @@ def create_project_folder(project_name: str) -> str | None:
 
     except Exception:
         logger.exception("Failed to create Drive folder for project '%s'", project_name)
-        return None
+        raise
 
 
 def upload_file(folder_id: str, filename: str, content: bytes, mime_type: str) -> str | None:
