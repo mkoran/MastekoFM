@@ -108,6 +108,7 @@ def run_calculation(project_id: str) -> dict[str, Any]:
             client = gcs.Client(project=settings.gcp_project)
             bucket = client.bucket("masteko-fm-outputs")
             blob = bucket.blob(blob_name)
+            blob.content_disposition = f'attachment; filename="{safe_name}_Model_{timestamp}.xlsx"'
             blob.upload_from_string(
                 final_bytes,
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -117,6 +118,7 @@ def run_calculation(project_id: str) -> dict[str, Any]:
 
             # Also upload as "latest" for easy access
             latest_blob = bucket.blob(f"{safe_name}/latest.xlsx")
+            latest_blob.content_disposition = f'attachment; filename="{safe_name}_Latest.xlsx"'
             latest_blob.upload_from_string(
                 final_bytes,
                 content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

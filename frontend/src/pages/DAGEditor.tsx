@@ -272,14 +272,20 @@ function DAGEditor({ projectId }: Props) {
 
           {Object.keys(outputs).length > 0 && (
             <div className="rounded border bg-white p-4">
-              <h4 className="mb-2 font-medium">Calculation Summary</h4>
-              <div className="grid grid-cols-2 gap-2 text-sm">
-                {Object.entries(outputs).filter(([, v]) => v != null && typeof v !== 'object').map(([k, v]) => (
-                  <div key={k} className="flex justify-between border-b py-1">
-                    <span className="capitalize text-gray-500">{k.replace(/_/g, ' ')}</span>
-                    <span className="font-medium">{String(v)}</span>
-                  </div>
-                ))}
+              <h4 className="mb-2 font-medium">Calculation Details</h4>
+              <div className="grid grid-cols-3 gap-4 text-sm">
+                <div className="rounded bg-gray-50 p-3 text-center">
+                  <p className="text-2xl font-bold text-gray-900">{String((outputs as Record<string, unknown>).assumptions_injected ?? 0)}</p>
+                  <p className="text-xs text-gray-500">Assumptions Injected</p>
+                </div>
+                <div className="rounded bg-gray-50 p-3 text-center">
+                  <p className="text-2xl font-bold text-gray-900">{String((outputs as Record<string, unknown>).file_size_kb ?? 0)} KB</p>
+                  <p className="text-xs text-gray-500">File Size</p>
+                </div>
+                <div className="rounded bg-gray-50 p-3 text-center">
+                  <p className="text-2xl font-bold text-green-600">{(outputs as Record<string, unknown>).libreoffice_used ? 'Yes' : 'No'}</p>
+                  <p className="text-xs text-gray-500">LibreOffice Recalculated</p>
+                </div>
               </div>
             </div>
           )}
