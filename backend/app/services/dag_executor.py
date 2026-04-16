@@ -95,37 +95,35 @@ def run_calculation(project_id: str) -> dict[str, Any]:
         project_data = project_doc.to_dict() if project_doc.exists else {}
         project_name = project_data.get("name", "model")
 
-        # Try to upload to Google Drive (project subfolder)
-        from backend.app.services.drive_service import create_project_folder, upload_file
-
-        drive_link = None
+        # Upload to Cloud Storage (public bucket for easy download)
+        download_link = None
         upload_error = None
-        drive_folder_id = project_data.get("drive_folder_id")
+        try:
+            from google.cloud import storage as gcs
 
-        # Create project subfolder if we have a root folder but no project folder
-        root_folder = settings.drive_root_folder_id
-        if not drive_folder_id and root_folder:
-            try:
-                drive_folder_id = create_project_folder(project_name)
-                if drive_folder_id:
-                    _get_project_ref(project_id).update({"drive_folder_id": drive_folder_id})
-            except Exception as e:
-                logger.warning("Could not create Drive folder: %s", e)
+            timestamp = now.strftime("%Y%m%d_%H%M")
+            safe_name = project_name.replace(" ", "_").replace("/", "_")
+            blob_name = f"{safe_name}/{safe_name}_Model_{timestamp}.xlsx"
 
-        if drive_folder_id:
-            try:
-                timestamp = now.strftime("%Y%m%d_%H%M")
-                filename = f"{project_name} - Model {timestamp}.xlsx"
-                file_id = upload_file(
-                    drive_folder_id, filename, final_bytes,
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                )
-                if file_id:
-                    drive_link = f"https://drive.google.com/file/d/{file_id}/view"
-                    logger.info("Uploaded to Drive: %s", drive_link)
-            except Exception as e:
-                upload_error = f"Drive upload: {e}"
-                logger.warning("Drive upload failed: %s", e)
+            client = gcs.Client(project=settings.gcp_project)
+            bucket = client.bucket("masteko-fm-outputs")
+            blob = bucket.blob(blob_name)
+            blob.upload_from_string(
+                final_bytes,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+            download_link = f"https://storage.googleapis.com/masteko-fm-outputs/{blob_name}"
+            logger.info("Uploaded to GCS: %s", download_link)
+
+            # Also upload as "latest" for easy access
+            latest_blob = bucket.blob(f"{safe_name}/latest.xlsx")
+            latest_blob.upload_from_string(
+                final_bytes,
+                content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        except Exception as e:
+            upload_error = str(e)
+            logger.warning("GCS upload failed: %s", e)
 
         # Store the output file for download
         _get_project_ref(project_id).update({
@@ -136,8 +134,8 @@ def run_calculation(project_id: str) -> dict[str, Any]:
         _get_project_ref(project_id).update({
             "calculation_status": "done",
             "last_calculated_at": now,
-            "output_download_url": f"/api/projects/{project_id}/model/download",
-            "output_drive_link": drive_link,
+            "output_download_url": download_link or f"/api/projects/{project_id}/model/download",
+            "output_drive_link": download_link,
             "output_filename": f"{project_name} - Model.xlsx",
             "calculation_used_libreoffice": recalced_bytes is not None,
             "assumptions_injected": len(cell_map),
@@ -149,8 +147,8 @@ def run_calculation(project_id: str) -> dict[str, Any]:
             "nodes_calculated": 1,
             "errors": [upload_error] if upload_error else [],
             "outputs": {
-                "download_url": f"/api/projects/{project_id}/model/download",
-                "drive_link": drive_link,
+                "download_url": download_link or f"/api/projects/{project_id}/model/download",
+                "drive_link": download_link,
                 "filename": f"{project_name} - Model.xlsx",
                 "libreoffice_used": recalced_bytes is not None,
                 "assumptions_injected": len(cell_map),

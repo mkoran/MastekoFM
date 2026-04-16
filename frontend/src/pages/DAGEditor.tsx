@@ -264,7 +264,7 @@ function DAGEditor({ projectId }: Props) {
               {driveLink && (
                 <a href={driveLink} target="_blank" rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 rounded border border-green-700 px-4 py-2.5 text-sm font-medium text-green-700 hover:bg-green-100">
-                  Open in Google Drive
+                  Direct Download Link
                 </a>
               )}
             </div>
