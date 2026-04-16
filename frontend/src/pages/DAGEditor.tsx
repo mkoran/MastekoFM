@@ -73,10 +73,10 @@ function DAGEditor({ projectId }: Props) {
       const result = await api.post<CalcResult>(`/projects/${projectId}/calculate`, {})
       if (result.success) {
         const out = result.outputs as Record<string, unknown>
-        const downloadUrl = out.download_url as string | null
-        setDriveLink(downloadUrl)
+        setDriveLink(out.drive_link as string | null)
         setOutputs(out)
-        setMessage({ text: 'Calculation complete! Download your Excel file below.', type: 'success' })
+        const hasDrive = !!out.drive_link
+        setMessage({ text: hasDrive ? 'Calculation complete! File saved to Google Drive.' : 'Calculation complete! Download your Excel file below.', type: 'success' })
         api.get<ModelStatus>(`${modelBase}/status`).then(setStatus)
       } else {
         setMessage({ text: `Calculation failed: ${result.errors.join(', ')}`, type: 'error' })
@@ -240,12 +240,27 @@ function DAGEditor({ projectId }: Props) {
               {' '}Download the complete Excel workbook to see all inputs, calculations, and outputs.
             </p>
             <div className="flex gap-3">
-              <a
-                href={`/api/projects/${projectId}/model/download`}
+              <button
+                onClick={async () => {
+                  const token = localStorage.getItem('masteko_dev_user')
+                    ? `dev-${JSON.parse(localStorage.getItem('masteko_dev_user')!).email}`
+                    : ''
+                  const resp = await fetch(`/api/projects/${projectId}/model/download`, {
+                    headers: { 'Authorization': `Bearer ${token}` },
+                  })
+                  if (!resp.ok) { setMessage({ text: 'Download failed', type: 'error' }); return }
+                  const blob = await resp.blob()
+                  const url = URL.createObjectURL(blob)
+                  const a = document.createElement('a')
+                  a.href = url
+                  a.download = (outputs as Record<string, unknown>).filename as string || 'model.xlsx'
+                  a.click()
+                  URL.revokeObjectURL(url)
+                }}
                 className="inline-flex items-center gap-2 rounded bg-green-700 px-4 py-2.5 text-sm font-medium text-white hover:bg-green-800"
               >
                 Download Excel File
-              </a>
+              </button>
               {driveLink && (
                 <a href={driveLink} target="_blank" rel="noopener noreferrer"
                   className="inline-flex items-center gap-2 rounded border border-green-700 px-4 py-2.5 text-sm font-medium text-green-700 hover:bg-green-100">

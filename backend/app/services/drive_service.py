@@ -33,6 +33,7 @@ def create_project_folder(project_name: str) -> str | None:
                 "parents": [root_folder_id],
             },
             fields="id",
+            supportsAllDrives=True,
         ).execute()
         project_folder_id = project_folder["id"]
 
@@ -44,6 +45,7 @@ def create_project_folder(project_name: str) -> str | None:
                     "parents": [project_folder_id],
                 },
                 fields="id",
+                supportsAllDrives=True,
             ).execute()
 
         logger.info("Created Drive folder for project '%s': %s", project_name, project_folder_id)
@@ -55,7 +57,10 @@ def create_project_folder(project_name: str) -> str | None:
 
 
 def upload_file(folder_id: str, filename: str, content: bytes, mime_type: str) -> str | None:
-    """Upload a file to a Google Drive folder. Returns file ID."""
+    """Upload a file to a Google Drive folder. Returns file ID.
+
+    Uses supportsAllDrives=True for Shared Drive compatibility.
+    """
     try:
         service = _get_drive_service()
         media = MediaIoBaseUpload(io.BytesIO(content), mimetype=mime_type, resumable=False)
@@ -63,6 +68,7 @@ def upload_file(folder_id: str, filename: str, content: bytes, mime_type: str) -
             body={"name": filename, "parents": [folder_id]},
             media_body=media,
             fields="id",
+            supportsAllDrives=True,
         ).execute()
         logger.info("Uploaded '%s' to Drive folder %s: %s", filename, folder_id, result["id"])
         return result["id"]
