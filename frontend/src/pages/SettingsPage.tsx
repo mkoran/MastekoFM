@@ -128,6 +128,20 @@ function SettingsPage() {
         </div>
         {saved && <p className="mb-3 text-sm text-green-600">Saved.</p>}
 
+        {driveFolderId && (
+          <div className="mb-3 rounded bg-gray-50 p-3 text-sm">
+            <div className="mb-1 text-xs font-semibold text-gray-600">Quick links</div>
+            <a
+              href={`https://drive.google.com/drive/folders/${driveFolderId}`}
+              target="_blank"
+              rel="noreferrer"
+              className="block text-blue-600 hover:underline"
+            >
+              Open Root folder in Drive ↗
+            </a>
+          </div>
+        )}
+
         <div className="flex gap-2">
           <button onClick={handleTestDrive} disabled={testingDrive}
             className="rounded border border-blue-600 px-4 py-2 text-sm text-blue-600 hover:bg-blue-50 disabled:opacity-50">
@@ -136,6 +150,13 @@ function SettingsPage() {
           <button onClick={handleTestGCS} disabled={testingGCS}
             className="rounded border border-gray-300 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-50">
             {testingGCS ? 'Testing...' : 'Test Cloud Storage'}
+          </button>
+          <button
+            onClick={signInWithGoogle}
+            className="rounded border border-gray-300 px-4 py-2 text-sm text-gray-600 hover:bg-gray-50"
+            title="Re-sign-in if your Google access token has expired (happens ~every hour)"
+          >
+            Refresh Google sign-in
           </button>
         </div>
 
