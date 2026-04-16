@@ -64,10 +64,12 @@ def upload_file(folder_id: str, filename: str, content: bytes, mime_type: str) -
             media_body=media,
             fields="id",
         ).execute()
+        logger.info("Uploaded '%s' to Drive folder %s: %s", filename, folder_id, result["id"])
         return result["id"]
-    except Exception:
-        logger.exception("Failed to upload file '%s'", filename)
-        return None
+    except Exception as e:
+        logger.exception("Failed to upload file '%s' to folder '%s'", filename, folder_id)
+        # Don't swallow — let caller handle
+        raise RuntimeError(f"Drive upload failed: {e}") from e
 
 
 def download_file(file_id: str) -> bytes | None:

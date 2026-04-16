@@ -97,19 +97,24 @@ def run_calculation(project_id: str) -> dict[str, Any]:
         project_name = project_data.get("name", "model")
         drive_folder_id = project_data.get("drive_folder_id")
 
-        # Save to Google Drive
+        # Save to Google Drive (best-effort — calculation still succeeds if Drive fails)
         drive_file_id = None
         drive_link = None
+        drive_error = None
         if drive_folder_id:
             timestamp = now.strftime("%Y%m%d_%H%M")
             filename = f"{project_name} - Model {timestamp}.xlsx"
-            drive_file_id = upload_file(
-                drive_folder_id, filename, final_bytes,
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-            if drive_file_id:
-                drive_link = f"https://docs.google.com/spreadsheets/d/{drive_file_id}"
-                logger.info("Saved model to Drive: %s", drive_link)
+            try:
+                drive_file_id = upload_file(
+                    drive_folder_id, filename, final_bytes,
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+                if drive_file_id:
+                    drive_link = f"https://docs.google.com/spreadsheets/d/{drive_file_id}"
+                    logger.info("Saved model to Drive: %s", drive_link)
+            except Exception as e:
+                drive_error = str(e)
+                logger.warning("Drive upload failed (calculation still succeeded): %s", e)
 
         # Store the output file for download
         _get_project_ref(project_id).update({
@@ -131,10 +136,11 @@ def run_calculation(project_id: str) -> dict[str, Any]:
         return {
             "success": True,
             "nodes_calculated": 1,
-            "errors": [],
+            "errors": [f"Drive upload: {drive_error}"] if drive_error else [],
             "outputs": {
                 "drive_link": drive_link,
                 "drive_file_id": drive_file_id,
+                "drive_error": drive_error,
                 "filename": f"{project_name} - Model.xlsx",
                 "libreoffice_used": recalced_bytes is not None,
                 "assumptions_injected": len(cell_map),
