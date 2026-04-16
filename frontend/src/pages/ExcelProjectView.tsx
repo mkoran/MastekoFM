@@ -27,7 +27,10 @@ interface ScenarioSummary {
 
 interface ScenarioDetail extends ScenarioSummary {
   description: string
-  storage_path: string
+  storage_kind: 'gcs' | 'drive_xlsx'
+  storage_path: string | null
+  drive_file_id: string | null
+  edit_url: string | null
   size_bytes: number
   last_run: {
     run_id: string
@@ -46,6 +49,10 @@ interface RunRecord {
   started_at: string
   completed_at: string | null
   duration_ms: number | null
+  template_version_used?: number
+  scenario_version_used?: number
+  input_storage_kind?: string | null
+  input_download_url?: string | null
   output_download_url: string | null
   warnings: string[]
   error: string | null
@@ -63,6 +70,7 @@ export default function ExcelProjectView() {
   const [calculating, setCalculating] = useState(false)
   const [newName, setNewName] = useState('')
   const [cloneFromId, setCloneFromId] = useState('')
+  const [newStorageKind, setNewStorageKind] = useState<'' | 'gcs' | 'drive_xlsx'>('')
   const uploadFileRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
 
@@ -89,11 +97,13 @@ export default function ExcelProjectView() {
       return
     }
     try {
-      const body: { name: string; clone_from_id?: string } = { name: newName }
+      const body: { name: string; clone_from_id?: string; storage_kind?: string } = { name: newName }
       if (cloneFromId) body.clone_from_id = cloneFromId
+      if (newStorageKind) body.storage_kind = newStorageKind
       await api.post(`/excel-projects/${projectId}/scenarios`, body)
       setNewName('')
       setCloneFromId('')
+      setNewStorageKind('')
       setMessage({ text: 'Scenario created', type: 'success' })
       loadProject()
     } catch (err) {
@@ -153,7 +163,8 @@ export default function ExcelProjectView() {
     }
   }
 
-  const downloadInputsUrl = selected ? `https://storage.googleapis.com/masteko-fm-outputs/${selected.storage_path}` : ''
+  const inputsEditUrl = selected?.edit_url ?? null
+  const isDriveScenario = selected?.storage_kind === 'drive_xlsx'
   const downloadOutputUrl = selected?.last_run?.output_download_url
 
   if (!project) {
@@ -213,6 +224,15 @@ export default function ExcelProjectView() {
                 <option key={s.id} value={s.id}>Clone from: {s.name}</option>
               ))}
             </select>
+            <select
+              className="mb-1 w-full rounded border px-2 py-1 text-xs"
+              value={newStorageKind}
+              onChange={(e) => setNewStorageKind(e.target.value as '' | 'gcs' | 'drive_xlsx')}
+            >
+              <option value="">Storage: use default</option>
+              <option value="gcs">Cloud Storage (GCS)</option>
+              <option value="drive_xlsx">Google Drive (.xlsx)</option>
+            </select>
             <button onClick={handleCreateScenario} className="w-full rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700">
               Create
             </button>
@@ -242,11 +262,35 @@ export default function ExcelProjectView() {
 
               <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2">
                 <div className="rounded border bg-gray-50 p-3">
-                  <div className="mb-1 text-xs font-semibold text-gray-600">Inputs file (I_ tabs only)</div>
-                  <a href={downloadInputsUrl} target="_blank" rel="noreferrer" className="block text-sm text-blue-600 hover:underline">
-                    Download current inputs .xlsx
-                  </a>
-                  <div className="mt-2 text-xs text-gray-500">To edit: download, open in Excel / Sheets, modify the I_ tabs, then upload below.</div>
+                  <div className="mb-1 flex items-center justify-between">
+                    <div className="text-xs font-semibold text-gray-600">Inputs file (I_ tabs only)</div>
+                    <span className={`rounded px-2 py-0.5 text-[10px] ${isDriveScenario ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>
+                      {isDriveScenario ? 'Drive' : 'GCS'}
+                    </span>
+                  </div>
+                  {isDriveScenario ? (
+                    <>
+                      {inputsEditUrl ? (
+                        <a href={inputsEditUrl} target="_blank" rel="noreferrer" className="inline-block rounded bg-green-600 px-3 py-1.5 text-sm text-white hover:bg-green-700">
+                          Edit in Google Sheets →
+                        </a>
+                      ) : (
+                        <p className="text-xs text-gray-500">Drive file not available.</p>
+                      )}
+                      <div className="mt-2 text-xs text-gray-500">Opens in Sheets (Office mode). Save in Sheets → Calculate → new output.</div>
+                    </>
+                  ) : (
+                    <>
+                      {inputsEditUrl ? (
+                        <a href={inputsEditUrl} target="_blank" rel="noreferrer" className="block text-sm text-blue-600 hover:underline">
+                          Download current inputs .xlsx
+                        </a>
+                      ) : (
+                        <p className="text-xs text-gray-500">No inputs file available.</p>
+                      )}
+                      <div className="mt-2 text-xs text-gray-500">To edit: download, open in Excel / Sheets, modify the I_ tabs, then upload below.</div>
+                    </>
+                  )}
                   <div className="mt-2 flex items-center gap-2">
                     <input ref={uploadFileRef} type="file" accept=".xlsx" className="text-xs" />
                     <button
@@ -287,7 +331,9 @@ export default function ExcelProjectView() {
                         <th className="px-2 py-1">Duration</th>
                         <th className="px-2 py-1">Tpl v</th>
                         <th className="px-2 py-1">Scn v</th>
+                        <th className="px-2 py-1">Inputs used</th>
                         <th className="px-2 py-1">Output</th>
+                        <th className="px-2 py-1">Warnings</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -296,14 +342,24 @@ export default function ExcelProjectView() {
                           <td className="px-2 py-1">{new Date(r.started_at).toLocaleString()}</td>
                           <td className="px-2 py-1">{r.status}{r.error && ` · ${r.error}`}</td>
                           <td className="px-2 py-1">{r.duration_ms ?? '—'}ms</td>
-                          <td className="px-2 py-1">{(r as unknown as { template_version_used?: number }).template_version_used ?? '—'}</td>
-                          <td className="px-2 py-1">{(r as unknown as { scenario_version_used?: number }).scenario_version_used ?? '—'}</td>
+                          <td className="px-2 py-1">{r.template_version_used ?? '—'}</td>
+                          <td className="px-2 py-1">{r.scenario_version_used ?? '—'}</td>
+                          <td className="px-2 py-1">
+                            {r.input_download_url ? (
+                              <a href={r.input_download_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
+                                {r.input_storage_kind === 'drive_xlsx' ? 'Sheets' : '.xlsx'}
+                              </a>
+                            ) : '—'}
+                          </td>
                           <td className="px-2 py-1">
                             {r.output_download_url && (
                               <a href={r.output_download_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">
                                 .xlsx
                               </a>
                             )}
+                          </td>
+                          <td className="px-2 py-1 text-gray-500">
+                            {r.warnings && r.warnings.length > 0 ? r.warnings.join('; ') : '—'}
                           </td>
                         </tr>
                       ))}

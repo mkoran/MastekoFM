@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react'
 import { useAuth } from '../contexts/AuthContext'
 import { api } from '../services/api'
 
+type StorageKind = 'gcs' | 'drive_xlsx'
+
 function SettingsPage() {
   const { user, googleAccessToken, signInWithGoogle } = useAuth()
   const [driveFolderId, setDriveFolderId] = useState('')
+  const [defaultStorageKind, setDefaultStorageKind] = useState<StorageKind>('gcs')
   const [saved, setSaved] = useState(false)
   const [loading, setLoading] = useState(true)
   const [testingGCS, setTestingGCS] = useState(false)
@@ -13,8 +16,11 @@ function SettingsPage() {
   const [driveResult, setDriveResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null)
 
   useEffect(() => {
-    api.get<{ drive_root_folder_id: string }>('/settings')
-      .then((s) => setDriveFolderId(s.drive_root_folder_id || ''))
+    api.get<{ drive_root_folder_id: string; default_scenario_storage_kind: StorageKind }>('/settings')
+      .then((s) => {
+        setDriveFolderId(s.drive_root_folder_id || '')
+        setDefaultStorageKind(s.default_scenario_storage_kind || 'gcs')
+      })
       .finally(() => setLoading(false))
   }, [])
 
@@ -24,7 +30,10 @@ function SettingsPage() {
     if (match) folderId = match[1] ?? folderId
     setDriveFolderId(folderId)
 
-    await api.put('/settings', { drive_root_folder_id: folderId })
+    await api.put('/settings', {
+      drive_root_folder_id: folderId,
+      default_scenario_storage_kind: defaultStorageKind,
+    })
     setSaved(true)
     setDriveResult(null)
     setGcsResult(null)
@@ -82,11 +91,31 @@ function SettingsPage() {
         )}
       </div>
 
+      {/* Default Scenario storage */}
+      <div className="mb-6 max-w-2xl rounded border bg-white p-6">
+        <h2 className="mb-3 text-lg font-medium">Where should new Scenarios live?</h2>
+        <p className="mb-3 text-sm text-gray-600">
+          Each Scenario is a .xlsx containing only the Template's <code className="rounded bg-gray-100 px-1">I_</code> tabs.
+          Drive-backed scenarios open in Google Sheets (Office mode) via one click — recommended once Google Sign-In is configured.
+          GCS is the simpler fallback that works without any Google credentials.
+        </p>
+        <label className="flex items-center gap-2 text-sm mb-2">
+          <input type="radio" name="storage-kind" value="gcs" checked={defaultStorageKind === 'gcs'}
+            onChange={() => setDefaultStorageKind('gcs')} />
+          <span><strong>Cloud Storage (GCS)</strong> — Scenario files stored in masteko-fm-outputs bucket. Edit via download/upload.</span>
+        </label>
+        <label className="flex items-center gap-2 text-sm">
+          <input type="radio" name="storage-kind" value="drive_xlsx" checked={defaultStorageKind === 'drive_xlsx'}
+            onChange={() => setDefaultStorageKind('drive_xlsx')} />
+          <span><strong>Google Drive (.xlsx)</strong> — Scenario files stored in Drive. Click "Edit in Sheets" to open in your browser; saves go back to the same file. Requires Google Sign-In + a Drive root folder below.</span>
+        </label>
+      </div>
+
       {/* Google Drive folder */}
       <div className="mb-6 max-w-2xl rounded border bg-white p-6">
-        <h2 className="mb-3 text-lg font-medium">Google Drive Output Folder</h2>
+        <h2 className="mb-3 text-lg font-medium">Google Drive Root Folder</h2>
         <p className="mb-3 text-sm text-gray-600">
-          Calculated Excel files will be saved to this Drive folder, organized by project and scenario.
+          Scenario files (Drive mode) and calculated output files live under <code className="rounded bg-gray-100 px-1">&lt;root&gt;/MastekoFM/&lt;project&gt;/Inputs/</code> and <code className="rounded bg-gray-100 px-1">.../Outputs/</code>.
         </p>
         <div className="mb-3 flex gap-2">
           <input

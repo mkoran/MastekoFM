@@ -11,6 +11,8 @@ from backend.app.config import settings
 
 logger = logging.getLogger(__name__)
 
+FOLDER_MIME = "application/vnd.google-apps.folder"
+
 
 def _get_drive_service(user_access_token: str | None = None):
     """Get authenticated Drive API service.
@@ -86,25 +88,95 @@ def upload_file(folder_id: str, filename: str, content: bytes, mime_type: str, u
         raise RuntimeError(f"Drive upload failed: {e}") from e
 
 
-def download_file(file_id: str) -> bytes | None:
-    """Download a file from Google Drive. Returns file content."""
+def download_file(file_id: str, user_access_token: str | None = None) -> bytes | None:
+    """Download a file's raw bytes from Google Drive.
+
+    When the file is a native Google-apps type (Doc, Sheet, Slide) this call
+    fails — callers who need that should use `export_file()` instead.
+    Here we always want .xlsx bytes, which are returned verbatim.
+    """
     try:
-        service = _get_drive_service()
-        content = service.files().get_media(fileId=file_id).execute()
+        service = _get_drive_service(user_access_token)
+        content = service.files().get_media(fileId=file_id, supportsAllDrives=True).execute()
         return content
     except Exception:
         logger.exception("Failed to download file '%s'", file_id)
         return None
 
 
-def list_files(folder_id: str) -> list[dict]:
+def update_file_content(
+    file_id: str,
+    content: bytes,
+    mime_type: str,
+    user_access_token: str | None = None,
+) -> str | None:
+    """Replace a Drive file's content in place. Preserves the file id and URL.
+
+    This is what enables "Edit in Sheets" links to stay stable across
+    scenario version bumps — we rewrite bytes, not the file identity.
+    """
+    try:
+        service = _get_drive_service(user_access_token)
+        media = MediaIoBaseUpload(io.BytesIO(content), mimetype=mime_type, resumable=False)
+        result = service.files().update(
+            fileId=file_id, media_body=media, fields="id", supportsAllDrives=True,
+        ).execute()
+        return result.get("id")
+    except Exception as e:
+        logger.exception("Failed to update file '%s'", file_id)
+        raise RuntimeError(f"Drive update failed: {e}") from e
+
+
+def find_or_create_folder(
+    name: str,
+    parent_id: str,
+    user_access_token: str | None = None,
+) -> str:
+    """Return the id of a child folder with this name under parent_id, creating if needed."""
+    service = _get_drive_service(user_access_token)
+    existing = service.files().list(
+        q=f"'{parent_id}' in parents and mimeType='{FOLDER_MIME}' and name='{name}' and trashed=false",
+        fields="files(id, name)",
+        supportsAllDrives=True, includeItemsFromAllDrives=True,
+    ).execute().get("files", [])
+    if existing:
+        return existing[0]["id"]
+    created = service.files().create(
+        body={"name": name, "mimeType": FOLDER_MIME, "parents": [parent_id]},
+        fields="id", supportsAllDrives=True,
+    ).execute()
+    return created["id"]
+
+
+def ensure_project_folders(
+    root_folder_id: str,
+    project_code: str,
+    user_access_token: str | None = None,
+) -> dict[str, str]:
+    """Ensure the Drive folder layout exists for a project.
+
+    Creates (idempotently):
+      <root>/MastekoFM/<project_code>/Inputs/
+      <root>/MastekoFM/<project_code>/Outputs/
+
+    Returns {"project": id, "inputs": id, "outputs": id}.
+    """
+    mfm = find_or_create_folder("MastekoFM", root_folder_id, user_access_token)
+    proj = find_or_create_folder(project_code, mfm, user_access_token)
+    inputs = find_or_create_folder("Inputs", proj, user_access_token)
+    outputs = find_or_create_folder("Outputs", proj, user_access_token)
+    return {"project": proj, "inputs": inputs, "outputs": outputs}
+
+
+def list_files(folder_id: str, user_access_token: str | None = None) -> list[dict]:
     """List files in a Google Drive folder."""
     try:
-        service = _get_drive_service()
+        service = _get_drive_service(user_access_token)
         results = service.files().list(
             q=f"'{folder_id}' in parents and trashed = false",
             fields="files(id, name, mimeType, modifiedTime, size)",
             orderBy="modifiedTime desc",
+            supportsAllDrives=True, includeItemsFromAllDrives=True,
         ).execute()
         return results.get("files", [])
     except Exception:

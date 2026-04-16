@@ -314,10 +314,14 @@ async def get_settings(current_user: CurrentUser):
     prefix = settings.firestore_collection_prefix
     doc = get_firestore_client().collection(f"{prefix}settings").document("app").get()
     if not doc.exists:
-        return {"drive_root_folder_id": settings.drive_root_folder_id}
+        return {
+            "drive_root_folder_id": settings.drive_root_folder_id,
+            "default_scenario_storage_kind": "gcs",
+        }
     data = doc.to_dict()
     return {
         "drive_root_folder_id": data.get("drive_root_folder_id", settings.drive_root_folder_id),
+        "default_scenario_storage_kind": data.get("default_scenario_storage_kind", "gcs"),
     }
 
 
@@ -329,6 +333,11 @@ async def update_settings(body: dict[str, Any], current_user: CurrentUser):
     updates = {"updated_at": datetime.now(UTC), "updated_by": current_user["uid"]}
     if "drive_root_folder_id" in body:
         updates["drive_root_folder_id"] = body["drive_root_folder_id"]
+    if "default_scenario_storage_kind" in body:
+        kind = body["default_scenario_storage_kind"]
+        if kind not in ("gcs", "drive_xlsx"):
+            raise HTTPException(status_code=400, detail="default_scenario_storage_kind must be 'gcs' or 'drive_xlsx'")
+        updates["default_scenario_storage_kind"] = kind
     doc_ref.set(updates, merge=True)
     return {"message": "Settings updated"}
 
