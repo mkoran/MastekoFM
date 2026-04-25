@@ -131,7 +131,7 @@ export default function RunDetailPage() {
             </div>
             <div>
               <dt className="text-xs font-semibold text-gray-500">Project</dt>
-              <dd className="mt-1"><Link to={`/excel-projects/${run.project_id}`} className="text-sm text-blue-600 hover:underline">{run.project_id}</Link></dd>
+              <dd className="mt-1"><Link to={`/projects/${run.project_id}`} className="text-sm text-blue-600 hover:underline">{run.project_id}</Link></dd>
             </div>
             <div>
               <dt className="text-xs font-semibold text-gray-500">Triggered by</dt>

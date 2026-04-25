@@ -69,10 +69,10 @@ export default function NewRunModal({ projectId, onClose, onRunComplete }: Props
 
   // Load all three lists on mount
   useEffect(() => {
-    api.get<AssumptionPackOption[]>(`/excel-projects/${projectId}/scenarios`)
+    api.get<AssumptionPackOption[]>(`/projects/${projectId}/assumption-packs`)
       .then((s) => setPacks(s.filter((p) => p.status === 'active')))
       .catch(() => setPacks([]))
-    api.get<ModelOption[]>('/excel-templates')
+    api.get<ModelOption[]>('/models')
       .then(setModels)
       .catch(() => setModels([]))
     api.get<OutputTemplateOption[]>('/output-templates')

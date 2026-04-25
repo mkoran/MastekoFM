@@ -5,7 +5,7 @@ from typing import Any
 from pydantic import BaseModel
 
 
-class ScenarioCreate(BaseModel):
+class AssumptionPackCreate(BaseModel):
     """Request body for creating a Scenario.
 
     Seeds the Scenario file from the Project's Template (I_ tabs only) unless
@@ -23,7 +23,7 @@ class ScenarioCreate(BaseModel):
     storage_kind: str | None = None  # "gcs" | "drive_xlsx" | None (use default)
 
 
-class ScenarioUpdate(BaseModel):
+class AssumptionPackUpdate(BaseModel):
     """Metadata update. File replacement is a separate upload endpoint."""
 
     name: str | None = None
@@ -32,7 +32,7 @@ class ScenarioUpdate(BaseModel):
     status: str | None = None
 
 
-class ScenarioResponse(BaseModel):
+class AssumptionPackResponse(BaseModel):
     """Full Scenario record."""
 
     id: str
@@ -53,7 +53,7 @@ class ScenarioResponse(BaseModel):
     updated_at: datetime
 
 
-class ScenarioSummary(BaseModel):
+class AssumptionPackSummary(BaseModel):
     """List-view summary."""
 
     id: str
@@ -66,22 +66,26 @@ class ScenarioSummary(BaseModel):
     created_at: datetime
 
 
-class ScenarioRunResponse(BaseModel):
-    """A single calculation run."""
+class AssumptionPackRunResponse(BaseModel):
+    """A single calculation run (legacy /api/projects/{p}/assumption-packs/{s}/runs).
+
+    Sprint A introduced the canonical Run model in models/run.py — this stays
+    here only for the legacy assumption_packs router compatibility surface.
+    """
 
     id: str
     scenario_id: str
     project_id: str
-    status: str                       # running | done | error
+    status: str
     started_at: datetime
     completed_at: datetime | None = None
     duration_ms: int | None = None
     template_version_used: int
     scenario_version_used: int
-    input_storage_kind: str | None = None          # which store was used for inputs
-    input_storage_path: str | None = None          # GCS path, if applicable
-    input_drive_file_id: str | None = None         # Drive file id, if applicable
-    input_download_url: str | None = None          # public/editor URL for the inputs file used
+    input_storage_kind: str | None = None
+    input_storage_path: str | None = None
+    input_drive_file_id: str | None = None
+    input_download_url: str | None = None
     output_storage_path: str | None = None
     output_download_url: str | None = None
     warnings: list[str] = []

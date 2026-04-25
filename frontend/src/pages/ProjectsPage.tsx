@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '../services/api'
 
-interface ExcelProjectSummary {
+interface ProjectSummary {
   id: string
   name: string
   code_name: string
@@ -13,15 +13,15 @@ interface ExcelProjectSummary {
   created_at: string
 }
 
-interface ExcelTemplateSummary {
+interface ModelSummary {
   id: string
   name: string
   code_name: string
 }
 
 export default function ExcelProjectsPage() {
-  const [projects, setProjects] = useState<ExcelProjectSummary[]>([])
-  const [templates, setTemplates] = useState<ExcelTemplateSummary[]>([])
+  const [projects, setProjects] = useState<ProjectSummary[]>([])
+  const [templates, setTemplates] = useState<ModelSummary[]>([])
   const [name, setName] = useState('')
   const [codeName, setCodeName] = useState('')
   const [templateId, setTemplateId] = useState('')
@@ -30,8 +30,8 @@ export default function ExcelProjectsPage() {
   const [creating, setCreating] = useState(false)
 
   const load = () => {
-    api.get<ExcelProjectSummary[]>('/excel-projects').then(setProjects).catch(() => setProjects([]))
-    api.get<ExcelTemplateSummary[]>('/excel-templates').then(setTemplates).catch(() => setTemplates([]))
+    api.get<ProjectSummary[]>('/projects').then(setProjects).catch(() => setProjects([]))
+    api.get<ModelSummary[]>('/models').then(setTemplates).catch(() => setTemplates([]))
   }
   useEffect(load, [])
 
@@ -46,7 +46,7 @@ export default function ExcelProjectsPage() {
     }
     setCreating(true)
     try {
-      await api.post('/excel-projects', { name, code_name: codeName, template_id: templateId, description })
+      await api.post('/projects', { name, code_name: codeName, template_id: templateId, description })
       setName('')
       setCodeName('')
       setDescription('')
@@ -64,7 +64,7 @@ export default function ExcelProjectsPage() {
   const handleArchive = async (id: string, n: string) => {
     if (!confirm(`Archive "${n}"?`)) return
     try {
-      await api.post(`/excel-projects/${id}/archive`, {})
+      await api.post(`/projects/${id}/archive`, {})
       load()
     } catch {
       setMessage({ text: 'Archive failed', type: 'error' })
@@ -78,7 +78,7 @@ export default function ExcelProjectsPage() {
           <h1 className="text-2xl font-semibold text-gray-900">Excel Projects</h1>
           <p className="mt-1 text-sm text-gray-600">A Project pairs one Excel Template with multiple Scenarios (inputs-only .xlsx files).</p>
         </div>
-        <Link to="/excel-templates" className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
+        <Link to="/models" className="rounded border border-gray-300 bg-white px-3 py-1.5 text-sm text-gray-700 hover:bg-gray-50">
           Manage Templates →
         </Link>
       </div>
@@ -134,7 +134,7 @@ export default function ExcelProjectsPage() {
             {projects.map((p) => (
               <tr key={p.id} className="border-t">
                 <td className="px-3 py-2 font-medium">
-                  <Link to={`/excel-projects/${p.id}`} className="text-blue-600 hover:underline">{p.name}</Link>
+                  <Link to={`/projects/${p.id}`} className="text-blue-600 hover:underline">{p.name}</Link>
                   <div className="text-xs text-gray-500">{p.code_name}</div>
                 </td>
                 <td className="px-3 py-2">{p.template_name}</td>

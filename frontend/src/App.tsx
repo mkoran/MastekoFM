@@ -1,19 +1,14 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { setTokenGetter, setGoogleTokenGetter } from './services/api'
 import ProtectedRoute from './components/ProtectedRoute'
 import Layout from './components/Layout'
-import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
-import ProjectView from './pages/ProjectView'
-import TemplatesPage from './pages/TemplatesPage'
-import TemplateGroupsPage from './pages/TemplateGroupsPage'
-import ScenarioEditor from './pages/ScenarioEditor'
 import SettingsPage from './pages/SettingsPage'
-import ExcelTemplatesPage from './pages/ExcelTemplatesPage'
-import ExcelProjectsPage from './pages/ExcelProjectsPage'
-import ExcelProjectView from './pages/ExcelProjectView'
+import ModelsPage from './pages/ModelsPage'
+import ProjectsPage from './pages/ProjectsPage'
+import ProjectView from './pages/ProjectView'
 import OutputTemplatesPage from './pages/OutputTemplatesPage'
 import RunsPage from './pages/RunsPage'
 import RunDetailPage from './pages/RunDetailPage'
@@ -36,23 +31,14 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/" element={<P><Dashboard /></P>} />
-      <Route path="/excel-templates" element={<P><ExcelTemplatesPage /></P>} />
-      <Route path="/excel-projects" element={<P><ExcelProjectsPage /></P>} />
-      <Route path="/excel-projects/:projectId" element={<P><ExcelProjectView /></P>} />
-      {/* Sprint A — three-way composition routes */}
+      <Route path="/" element={<Navigate to="/projects" replace />} />
+      <Route path="/projects" element={<P><ProjectsPage /></P>} />
+      <Route path="/projects/:projectId" element={<P><ProjectView /></P>} />
+      <Route path="/models" element={<P><ModelsPage /></P>} />
       <Route path="/output-templates" element={<P><OutputTemplatesPage /></P>} />
       <Route path="/runs" element={<P><RunsPage /></P>} />
       <Route path="/runs/:runId" element={<P><RunDetailPage /></P>} />
-      <Route path="/templates" element={<P><TemplatesPage /></P>} />
-      <Route path="/template-groups" element={<P><TemplateGroupsPage /></P>} />
-      <Route path="/template-groups/:groupId" element={<P><TemplateGroupsPage /></P>} />
       <Route path="/settings" element={<P><SettingsPage /></P>} />
-      <Route path="/projects/:projectId" element={<P><ProjectView /></P>} />
-      <Route path="/projects/:projectId/datasources" element={<P><ProjectView section="datasources" /></P>} />
-      <Route path="/projects/:projectId/dag" element={<P><ProjectView section="dag" /></P>} />
-      <Route path="/projects/:projectId/reports" element={<P><ProjectView section="reports" /></P>} />
-      <Route path="/projects/:projectId/scenarios/:scenarioId" element={<P><ScenarioEditor /></P>} />
     </Routes>
   )
 }

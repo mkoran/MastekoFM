@@ -3,70 +3,44 @@ import { useAuth } from '../contexts/AuthContext'
 import { useEffect, useState } from 'react'
 import { api } from '../services/api'
 
-interface NavProject { id: string; name: string }
-interface NavTG { id: string; name: string }
-interface NavTGV { id: string; name: string }
-interface NavExcelProject { id: string; name: string; code_name: string }
-interface NavScenario { id: string; name: string }
+interface NavProject { id: string; name: string; code_name: string }
+interface NavPack { id: string; name: string }
 
-// TGV (legacy) nav is hidden by default. Set ?legacy=1 in the URL to re-enable it
-// for historical reference. Backlog item DEL-001 tracks removing TGV entirely.
-const SHOW_LEGACY_TGV = typeof window !== 'undefined' && window.location.search.includes('legacy=1')
-
-const projectNav = [
-  { suffix: '', label: 'Assumptions', icon: '\u{1F4CA}' },
-  { suffix: '/datasources', label: 'Data Sources', icon: '\u{1F517}' },
-  { suffix: '/dag', label: 'DAG', icon: '\u{1F501}' },
-  { suffix: '/reports', label: 'Reports', icon: '\u{1F4C4}' },
-]
-
+/**
+ * Sprint B Layout — clean nav. Legacy TGV nav removed.
+ * Sprint A.5 will replace this sidebar with the Tree Navigator.
+ */
 function Layout({ children }: { children: React.ReactNode }) {
   const { user, signOut } = useAuth()
   const location = useLocation()
   const { projectId } = useParams<{ projectId: string }>()
 
   const [projects, setProjects] = useState<NavProject[]>([])
-  const [templateGroups, setTemplateGroups] = useState<NavTG[]>([])
-  const [scenarios, setScenarios] = useState<NavTGV[]>([])
-  const [excelProjects, setExcelProjects] = useState<NavExcelProject[]>([])
-  const [excelScenarios, setExcelScenarios] = useState<Record<string, NavScenario[]>>({})
-  const [expandedProject, setExpandedProject] = useState<string | null>(null)
-  const [expandedExcelProject, setExpandedExcelProject] = useState<string | null>(null)
+  const [packs, setPacks] = useState<Record<string, NavPack[]>>({})
+  const [expanded, setExpanded] = useState<string | null>(null)
 
-  const isProjectView = !!projectId
   const isActive = (path: string) => location.pathname === path
 
   useEffect(() => {
-    if (SHOW_LEGACY_TGV) {
-      api.get<NavProject[]>('/projects').then(setProjects).catch(() => {})
-      api.get<NavTG[]>('/template-groups').then(setTemplateGroups).catch(() => {})
-    }
-    api.get<NavExcelProject[]>('/excel-projects').then(setExcelProjects).catch(() => {})
+    api.get<NavProject[]>('/projects').then(setProjects).catch(() => {})
   }, [])
 
   useEffect(() => {
     if (projectId) {
-      setExpandedProject(projectId)
-      api.get<NavTGV[]>(`/projects/${projectId}/scenarios`).then(setScenarios).catch(() => {})
+      setExpanded(projectId)
+      api.get<NavPack[]>(`/projects/${projectId}/assumption-packs`)
+        .then((p) => setPacks((prev) => ({ ...prev, [projectId]: p })))
+        .catch(() => {})
     }
   }, [projectId])
 
   const toggleProject = (pid: string) => {
-    if (expandedProject === pid) {
-      setExpandedProject(null)
+    if (expanded === pid) {
+      setExpanded(null)
     } else {
-      setExpandedProject(pid)
-      api.get<NavTGV[]>(`/projects/${pid}/scenarios`).then(setScenarios).catch(() => {})
-    }
-  }
-
-  const toggleExcelProject = (pid: string) => {
-    if (expandedExcelProject === pid) {
-      setExpandedExcelProject(null)
-    } else {
-      setExpandedExcelProject(pid)
-      api.get<NavScenario[]>(`/excel-projects/${pid}/scenarios`)
-        .then((s) => setExcelScenarios((prev) => ({ ...prev, [pid]: s })))
+      setExpanded(pid)
+      api.get<NavPack[]>(`/projects/${pid}/assumption-packs`)
+        .then((p) => setPacks((prev) => ({ ...prev, [pid]: p })))
         .catch(() => {})
     }
   }
@@ -75,33 +49,35 @@ function Layout({ children }: { children: React.ReactNode }) {
     <div className="flex min-h-screen">
       <aside className="flex w-60 flex-shrink-0 flex-col border-r bg-gray-900 text-white">
         <div className="border-b border-gray-700 px-4 py-4">
-          <Link to="/" className="text-lg font-bold">MastekoFM</Link>
+          <Link to="/projects" className="text-lg font-bold">MastekoFM</Link>
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3 text-sm">
-          {/* Projects */}
-          <Link to="/excel-projects" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/excel-projects') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+          <Link
+            to="/projects"
+            className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/projects') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
+          >
             <span className="text-xs">&#9632;</span> Projects
           </Link>
-          {excelProjects.map((p) => (
+          {projects.map((p) => (
             <div key={p.id}>
               <div className="flex items-center">
-                <button onClick={() => toggleExcelProject(p.id)} className="px-2 py-0.5 text-xs text-gray-500 hover:text-white">
-                  {expandedExcelProject === p.id ? '\u25BC' : '\u25B6'}
+                <button onClick={() => toggleProject(p.id)} className="px-2 py-0.5 text-xs text-gray-500 hover:text-white">
+                  {expanded === p.id ? '\u25BC' : '\u25B6'}
                 </button>
                 <Link
-                  to={`/excel-projects/${p.id}`}
-                  className={`flex-1 truncate rounded px-1 py-1 text-xs ${isActive(`/excel-projects/${p.id}`) ? 'text-white' : 'text-gray-400 hover:text-white'}`}
+                  to={`/projects/${p.id}`}
+                  className={`flex-1 truncate rounded px-1 py-1 text-xs ${isActive(`/projects/${p.id}`) ? 'text-white' : 'text-gray-400 hover:text-white'}`}
                 >
                   {p.name}
                 </Link>
               </div>
-              {expandedExcelProject === p.id && (
+              {expanded === p.id && (
                 <div className="ml-6 border-l border-gray-700 pl-2">
-                  {(excelScenarios[p.id] || []).map((s) => (
+                  {(packs[p.id] || []).map((s) => (
                     <Link
                       key={s.id}
-                      to={`/excel-projects/${p.id}`}
+                      to={`/projects/${p.id}`}
                       className="mb-0.5 block truncate rounded px-2 py-0.5 text-xs text-gray-500 hover:text-gray-300"
                     >
                       {s.name}
@@ -112,7 +88,7 @@ function Layout({ children }: { children: React.ReactNode }) {
             </div>
           ))}
 
-          <Link to="/excel-templates" className={`mt-2 mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/excel-templates') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+          <Link to="/models" className={`mt-2 mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/models') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
             <span className="text-xs">&#9632;</span> Models
           </Link>
 
@@ -126,84 +102,9 @@ function Layout({ children }: { children: React.ReactNode }) {
 
           <div className="my-3 border-t border-gray-700" />
 
-          {/* Legacy Projects (TGV system) — hidden by default */}
-          {SHOW_LEGACY_TGV && (
-            <>
-              <p className="mb-1 px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Legacy</p>
-              <Link to="/" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-                <span className="text-xs">&#9632;</span> Projects (TGV)
-              </Link>
-            </>
-          )}
-          {SHOW_LEGACY_TGV && projects.map((p) => (
-            <div key={p.id}>
-              <div className="flex items-center">
-                <button onClick={() => toggleProject(p.id)} className="px-2 py-0.5 text-xs text-gray-500 hover:text-white">
-                  {expandedProject === p.id ? '\u25BC' : '\u25B6'}
-                </button>
-                <Link to={`/projects/${p.id}`}
-                  className={`flex-1 truncate rounded px-1 py-1 text-xs ${isActive(`/projects/${p.id}`) ? 'text-white' : 'text-gray-400 hover:text-white'}`}>
-                  {p.name}
-                </Link>
-              </div>
-              {expandedProject === p.id && (
-                <div className="ml-6 border-l border-gray-700 pl-2">
-                  {scenarios.map((s) => (
-                    <Link key={s.id} to={`/projects/${p.id}/scenarios/${s.id}`}
-                      className={`mb-0.5 block truncate rounded px-2 py-0.5 text-xs ${isActive(`/projects/${p.id}/scenarios/${s.id}`) ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
-                      {s.name}
-                    </Link>
-                  ))}
-                </div>
-              )}
-            </div>
-          ))}
-
-          {SHOW_LEGACY_TGV && <div className="my-3 border-t border-gray-700" />}
-
-          {/* Templates (legacy TGV assumption templates) */}
-          {SHOW_LEGACY_TGV && (
-            <Link to="/templates" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/templates') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-              <span className="text-xs">&#9632;</span> Templates (TGV)
-            </Link>
-          )}
-
-          {/* Template Groups (legacy) */}
-          {SHOW_LEGACY_TGV && (
-            <Link to="/template-groups" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/template-groups') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-              <span className="text-xs">&#9632;</span> Template Groups (TGV)
-            </Link>
-          )}
-          {SHOW_LEGACY_TGV && templateGroups.map((tg) => (
-            <Link key={tg.id} to={`/template-groups/${tg.id}`}
-              className={`mb-0.5 ml-4 block truncate rounded px-2 py-0.5 text-xs ${isActive(`/template-groups/${tg.id}`) ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
-              {tg.name}
-            </Link>
-          ))}
-
-          <div className="my-3 border-t border-gray-700" />
-
-          {/* Settings */}
           <Link to="/settings" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/settings') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
             <span className="text-xs">&#9881;</span> Settings
           </Link>
-
-          {/* Project-scoped nav */}
-          {isProjectView && (
-            <>
-              <div className="my-3 border-t border-gray-700" />
-              <p className="mb-2 px-3 text-xs font-semibold uppercase tracking-wider text-gray-500">Project</p>
-              {projectNav.map((item) => {
-                const path = `/projects/${projectId}${item.suffix}`
-                return (
-                  <Link key={item.suffix} to={path}
-                    className={`mb-1 flex items-center gap-3 rounded-lg px-3 py-2 ${isActive(path) ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-                    <span>{item.icon}</span> {item.label}
-                  </Link>
-                )
-              })}
-            </>
-          )}
         </nav>
 
         <div className="border-t border-gray-700 px-4 py-3">

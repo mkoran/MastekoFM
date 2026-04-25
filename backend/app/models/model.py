@@ -12,7 +12,7 @@ from datetime import datetime
 from pydantic import BaseModel
 
 
-class ExcelTemplateSummary(BaseModel):
+class ModelSummary(BaseModel):
     """Lightweight Excel Template for list views."""
 
     id: str
@@ -26,7 +26,7 @@ class ExcelTemplateSummary(BaseModel):
     updated_at: datetime
 
 
-class ExcelTemplateResponse(BaseModel):
+class ModelResponse(BaseModel):
     """Full Excel Template record."""
 
     id: str
@@ -45,7 +45,7 @@ class ExcelTemplateResponse(BaseModel):
     updated_at: datetime
 
 
-class ExcelTemplateUpdate(BaseModel):
+class ModelUpdate(BaseModel):
     """Metadata update (file content is replaced via re-upload)."""
 
     name: str | None = None

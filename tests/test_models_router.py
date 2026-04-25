@@ -11,10 +11,10 @@ from backend.app.main import app
 
 client = TestClient(app)
 AUTH = {"Authorization": "Bearer dev-test@example.com"}
-PATCH_DB = "backend.app.routers.excel_templates.get_firestore_client"
-PATCH_STORAGE_UPLOAD = "backend.app.routers.excel_templates.storage_service.upload_xlsx"
-PATCH_STORAGE_DELETE = "backend.app.routers.excel_templates.storage_service.delete_blob"
-PATCH_STORAGE_DOWNLOAD = "backend.app.routers.excel_templates.storage_service.download_xlsx"
+PATCH_DB = "backend.app.routers.models.get_firestore_client"
+PATCH_STORAGE_UPLOAD = "backend.app.routers.models.storage_service.upload_xlsx"
+PATCH_STORAGE_DELETE = "backend.app.routers.models.storage_service.delete_blob"
+PATCH_STORAGE_DOWNLOAD = "backend.app.routers.models.storage_service.download_xlsx"
 
 FIXTURE = Path(__file__).parent / "fixtures" / "campus_adele.xlsx"
 
@@ -43,7 +43,7 @@ def test_upload_excel_template_classifies_tabs(mock_db, mock_upload):
 
     file_bytes = _tiny_template_bytes()
     resp = client.post(
-        "/api/excel-templates",
+        "/api/models",
         headers=AUTH,
         files={"file": ("toy.xlsx", file_bytes,
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
@@ -73,7 +73,7 @@ def test_upload_rejects_file_without_input_tab(mock_db):
     wb.save(buf)
 
     resp = client.post(
-        "/api/excel-templates",
+        "/api/models",
         headers=AUTH,
         files={"file": ("bad.xlsx", buf.getvalue(),
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
@@ -97,7 +97,7 @@ def test_list_excel_templates(mock_db):
     }
     mock_client.collection.return_value.stream.return_value = [mock_doc]
 
-    resp = client.get("/api/excel-templates", headers=AUTH)
+    resp = client.get("/api/models", headers=AUTH)
     assert resp.status_code == 200
     data = resp.json()
     assert len(data) == 1
@@ -106,7 +106,7 @@ def test_list_excel_templates(mock_db):
 
 def test_upload_requires_auth():
     resp = client.post(
-        "/api/excel-templates",
+        "/api/models",
         files={"file": ("x.xlsx", b"fake",
                         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")},
         data={"name": "x"},

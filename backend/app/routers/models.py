@@ -6,25 +6,25 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
-from backend.app.models.excel_template import (
-    ExcelTemplateResponse,
-    ExcelTemplateSummary,
-    ExcelTemplateUpdate,
+from backend.app.models.model import (
+    ModelResponse,
+    ModelSummary,
+    ModelUpdate,
 )
 from backend.app.services import excel_template_engine, storage_service
 
-router = APIRouter(tags=["excel-templates"])
+router = APIRouter(tags=["models"])
 
 CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
 
 
 def _ref():
     prefix = settings.firestore_collection_prefix
-    return get_firestore_client().collection(f"{prefix}excel_templates")
+    return get_firestore_client().collection(f"{prefix}models")
 
 
-def _to_response(doc_id: str, data: dict[str, Any]) -> ExcelTemplateResponse:
-    return ExcelTemplateResponse(
+def _to_response(doc_id: str, data: dict[str, Any]) -> ModelResponse:
+    return ModelResponse(
         id=doc_id,
         name=data.get("name", ""),
         code_name=data.get("code_name", ""),
@@ -42,8 +42,8 @@ def _to_response(doc_id: str, data: dict[str, Any]) -> ExcelTemplateResponse:
     )
 
 
-def _to_summary(doc_id: str, data: dict[str, Any]) -> ExcelTemplateSummary:
-    return ExcelTemplateSummary(
+def _to_summary(doc_id: str, data: dict[str, Any]) -> ModelSummary:
+    return ModelSummary(
         id=doc_id,
         name=data.get("name", ""),
         code_name=data.get("code_name", ""),
@@ -56,7 +56,7 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> ExcelTemplateSummary:
     )
 
 
-@router.post("/api/excel-templates", response_model=ExcelTemplateResponse, status_code=201)
+@router.post("/api/models", response_model=ModelResponse, status_code=201)
 async def upload_excel_template(
     current_user: CurrentUser,
     file: Annotated[UploadFile, File()],
@@ -107,13 +107,13 @@ async def upload_excel_template(
     return _to_response(doc_ref.id, data)
 
 
-@router.get("/api/excel-templates", response_model=list[ExcelTemplateSummary])
+@router.get("/api/models", response_model=list[ModelSummary])
 async def list_excel_templates(current_user: CurrentUser):
     """List all Excel Templates (summary view)."""
     return [_to_summary(doc.id, doc.to_dict()) for doc in _ref().stream()]
 
 
-@router.get("/api/excel-templates/{template_id}", response_model=ExcelTemplateResponse)
+@router.get("/api/models/{template_id}", response_model=ModelResponse)
 async def get_excel_template(template_id: str, current_user: CurrentUser):
     """Get one Excel Template."""
     doc = _ref().document(template_id).get()
@@ -122,7 +122,7 @@ async def get_excel_template(template_id: str, current_user: CurrentUser):
     return _to_response(doc.id, doc.to_dict())
 
 
-@router.get("/api/excel-templates/{template_id}/download")
+@router.get("/api/models/{template_id}/download")
 async def download_excel_template(template_id: str, current_user: CurrentUser):
     """Redirect-ready download URL for the Template .xlsx."""
     doc = _ref().document(template_id).get()
@@ -132,7 +132,7 @@ async def download_excel_template(template_id: str, current_user: CurrentUser):
     return {"download_url": storage_service.public_url(data.get("storage_path", ""))}
 
 
-@router.post("/api/excel-templates/{template_id}/replace", response_model=ExcelTemplateResponse)
+@router.post("/api/models/{template_id}/replace", response_model=ModelResponse)
 async def replace_excel_template(
     template_id: str,
     current_user: CurrentUser,
@@ -179,9 +179,9 @@ async def replace_excel_template(
     return _to_response(template_id, {**existing, **updates})
 
 
-@router.put("/api/excel-templates/{template_id}", response_model=ExcelTemplateResponse)
+@router.put("/api/models/{template_id}", response_model=ModelResponse)
 async def update_excel_template(
-    template_id: str, body: ExcelTemplateUpdate, current_user: CurrentUser
+    template_id: str, body: ModelUpdate, current_user: CurrentUser
 ):
     """Update Template metadata (name / description / code_name)."""
     doc_ref = _ref().document(template_id)
@@ -199,7 +199,7 @@ async def update_excel_template(
     return _to_response(template_id, {**doc.to_dict(), **updates})
 
 
-@router.delete("/api/excel-templates/{template_id}", status_code=204)
+@router.delete("/api/models/{template_id}", status_code=204)
 async def delete_excel_template(template_id: str, current_user: CurrentUser):
     """Delete an Excel Template. Does NOT cascade into projects (they stay pinned)."""
     doc_ref = _ref().document(template_id)

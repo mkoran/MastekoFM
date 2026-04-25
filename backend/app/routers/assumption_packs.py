@@ -6,7 +6,7 @@ Supports two backends via `storage_kind`:
                     opens it in Sheets (Office mode) with no conversion.
 
 All bytes are normalized to .xlsx at Calculate time, so the engine is identical
-regardless of backend. See services/scenario_store.py for the adapter.
+regardless of backend. See services/pack_store.py for the adapter.
 """
 import time
 from datetime import UTC, datetime
@@ -16,37 +16,37 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
-from backend.app.models.scenario import (
-    ScenarioCreate,
-    ScenarioResponse,
-    ScenarioRunResponse,
-    ScenarioSummary,
-    ScenarioUpdate,
+from backend.app.models.assumption_pack import (
+    AssumptionPackCreate,
+    AssumptionPackResponse,
+    AssumptionPackRunResponse,
+    AssumptionPackSummary,
+    AssumptionPackUpdate,
 )
 from backend.app.services import (
     drive_service,
     excel_template_engine,
-    scenario_store,
+    pack_store,
     storage_service,
 )
 
-router = APIRouter(tags=["scenarios"])
+router = APIRouter(tags=["assumption-packs"])
 
 CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
 
 
 def _proj_ref(project_id: str):
     prefix = settings.firestore_collection_prefix
-    return get_firestore_client().collection(f"{prefix}excel_projects").document(project_id)
+    return get_firestore_client().collection(f"{prefix}projects").document(project_id)
 
 
 def _tpl_ref(template_id: str):
     prefix = settings.firestore_collection_prefix
-    return get_firestore_client().collection(f"{prefix}excel_templates").document(template_id)
+    return get_firestore_client().collection(f"{prefix}models").document(template_id)
 
 
 def _scn_ref(project_id: str):
-    return _proj_ref(project_id).collection("scenarios")
+    return _proj_ref(project_id).collection("assumption_packs")
 
 
 def _run_ref(project_id: str, scenario_id: str):
@@ -60,16 +60,16 @@ def _settings_doc() -> dict[str, Any]:
 
 
 def _default_storage_kind() -> str:
-    return _settings_doc().get("default_scenario_storage_kind") or scenario_store.STORAGE_KIND_GCS
+    return _settings_doc().get("default_scenario_storage_kind") or pack_store.STORAGE_KIND_GCS
 
 
 def _drive_root_folder_id() -> str:
     return _settings_doc().get("drive_root_folder_id", "") or settings.drive_root_folder_id
 
 
-def _to_scenario(doc_id: str, data: dict[str, Any]) -> ScenarioResponse:
-    store = scenario_store.store_for_scenario(data)
-    return ScenarioResponse(
+def _to_scenario(doc_id: str, data: dict[str, Any]) -> AssumptionPackResponse:
+    store = pack_store.store_for_scenario(data)
+    return AssumptionPackResponse(
         id=doc_id,
         name=data.get("name", ""),
         code_name=data.get("code_name", ""),
@@ -89,9 +89,9 @@ def _to_scenario(doc_id: str, data: dict[str, Any]) -> ScenarioResponse:
     )
 
 
-def _to_summary(doc_id: str, data: dict[str, Any]) -> ScenarioSummary:
+def _to_summary(doc_id: str, data: dict[str, Any]) -> AssumptionPackSummary:
     last = data.get("last_run") or {}
-    return ScenarioSummary(
+    return AssumptionPackSummary(
         id=doc_id,
         name=data.get("name", ""),
         code_name=data.get("code_name", ""),
@@ -140,12 +140,12 @@ def _resolve_drive_folders(
 
 
 @router.post(
-    "/api/excel-projects/{project_id}/scenarios",
-    response_model=ScenarioResponse,
+    "/api/projects/{project_id}/assumption-packs",
+    response_model=AssumptionPackResponse,
     status_code=201,
 )
 async def create_scenario(
-    project_id: str, body: ScenarioCreate, request: Request, current_user: CurrentUser
+    project_id: str, body: AssumptionPackCreate, request: Request, current_user: CurrentUser
 ):
     """Create a Scenario. Seeds the inputs-only file from the Template (or clones another scenario).
 
@@ -158,7 +158,7 @@ async def create_scenario(
 
     # Decide storage kind
     kind = body.storage_kind or _default_storage_kind()
-    if kind not in (scenario_store.STORAGE_KIND_GCS, scenario_store.STORAGE_KIND_DRIVE_XLSX):
+    if kind not in (pack_store.STORAGE_KIND_GCS, pack_store.STORAGE_KIND_DRIVE_XLSX):
         raise HTTPException(status_code=400, detail=f"Unknown storage_kind: {kind}")
 
     # Produce seed bytes — from clone or from Template extract
@@ -167,7 +167,7 @@ async def create_scenario(
         if not src_doc.exists:
             raise HTTPException(status_code=404, detail="Source scenario not found")
         src = src_doc.to_dict()
-        src_store = scenario_store.store_for_scenario(src)
+        src_store = pack_store.store_for_scenario(src)
         seed_bytes = src_store.read_bytes(src, user_access_token=user_token)
     else:
         tpl_bytes = storage_service.download_xlsx(tpl.get("storage_path", ""))
@@ -178,9 +178,9 @@ async def create_scenario(
     scenario_code = storage_service.safe_name(body.code_name or body.name, fallback=doc_ref.id)
 
     # Store the bytes in the chosen backend
-    store = scenario_store.get_store(kind)
+    store = pack_store.get_store(kind)
     existing_ctx: dict[str, Any] = {}
-    if kind == scenario_store.STORAGE_KIND_DRIVE_XLSX:
+    if kind == pack_store.STORAGE_KIND_DRIVE_XLSX:
         folders = _resolve_drive_folders(project_id, proj, project_code, user_token)
         existing_ctx["drive_folder_id"] = folders["inputs"]
     filename = f"{project_code}_{scenario_code}.xlsx"
@@ -214,8 +214,8 @@ async def create_scenario(
 
 
 @router.get(
-    "/api/excel-projects/{project_id}/scenarios",
-    response_model=list[ScenarioSummary],
+    "/api/projects/{project_id}/assumption-packs",
+    response_model=list[AssumptionPackSummary],
 )
 async def list_scenarios(project_id: str, current_user: CurrentUser):
     """List scenarios for an Excel Project."""
@@ -223,8 +223,8 @@ async def list_scenarios(project_id: str, current_user: CurrentUser):
 
 
 @router.get(
-    "/api/excel-projects/{project_id}/scenarios/{scenario_id}",
-    response_model=ScenarioResponse,
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}",
+    response_model=AssumptionPackResponse,
 )
 async def get_scenario(project_id: str, scenario_id: str, current_user: CurrentUser):
     """Get a single Scenario."""
@@ -235,13 +235,13 @@ async def get_scenario(project_id: str, scenario_id: str, current_user: CurrentU
 
 
 @router.put(
-    "/api/excel-projects/{project_id}/scenarios/{scenario_id}",
-    response_model=ScenarioResponse,
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}",
+    response_model=AssumptionPackResponse,
 )
 async def update_scenario(
     project_id: str,
     scenario_id: str,
-    body: ScenarioUpdate,
+    body: AssumptionPackUpdate,
     current_user: CurrentUser,
 ):
     """Update scenario metadata. Does not change the file."""
@@ -267,14 +267,14 @@ async def update_scenario(
 # ── File download / replace / archive ────────────────────────────────────────
 
 
-@router.get("/api/excel-projects/{project_id}/scenarios/{scenario_id}/download")
+@router.get("/api/projects/{project_id}/assumption-packs/{scenario_id}/download")
 async def download_scenario(project_id: str, scenario_id: str, current_user: CurrentUser):
     """Return the scenario's edit URL — GCS public URL or Drive docs.google URL."""
     doc = _scn_ref(project_id).document(scenario_id).get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Scenario not found")
     data = doc.to_dict()
-    store = scenario_store.store_for_scenario(data)
+    store = pack_store.store_for_scenario(data)
     return {
         "download_url": store.open_url(data),
         "storage_kind": data.get("storage_kind") or store.kind,
@@ -282,8 +282,8 @@ async def download_scenario(project_id: str, scenario_id: str, current_user: Cur
 
 
 @router.post(
-    "/api/excel-projects/{project_id}/scenarios/{scenario_id}/upload",
-    response_model=ScenarioResponse,
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}/upload",
+    response_model=AssumptionPackResponse,
 )
 async def upload_scenario_file(
     project_id: str,
@@ -332,9 +332,9 @@ async def upload_scenario_file(
     scenario_code = scn.get("code_name", "scenario")
     filename = file.filename or f"{project_code}_{scenario_code}.xlsx"
 
-    store = scenario_store.store_for_scenario(scn)
+    store = pack_store.store_for_scenario(scn)
     existing_ctx: dict[str, Any] = {}
-    if store.kind == scenario_store.STORAGE_KIND_DRIVE_XLSX:
+    if store.kind == pack_store.STORAGE_KIND_DRIVE_XLSX:
         folders = _resolve_drive_folders(project_id, proj, project_code, user_token)
         existing_ctx = {
             "drive_folder_id": folders["inputs"],
@@ -357,8 +357,8 @@ async def upload_scenario_file(
 
 
 @router.post(
-    "/api/excel-projects/{project_id}/scenarios/{scenario_id}/archive",
-    response_model=ScenarioResponse,
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}/archive",
+    response_model=AssumptionPackResponse,
 )
 async def archive_scenario(project_id: str, scenario_id: str, current_user: CurrentUser):
     """Archive a scenario (non-destructive)."""
@@ -375,8 +375,8 @@ async def archive_scenario(project_id: str, scenario_id: str, current_user: Curr
 
 
 @router.post(
-    "/api/excel-projects/{project_id}/scenarios/{scenario_id}/calculate",
-    response_model=ScenarioRunResponse,
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}/calculate",
+    response_model=AssumptionPackRunResponse,
 )
 async def calculate_scenario(
     project_id: str,
@@ -401,7 +401,7 @@ async def calculate_scenario(
     started_at = datetime.now(UTC)
     t_start = time.monotonic()
 
-    store = scenario_store.store_for_scenario(scn)
+    store = pack_store.store_for_scenario(scn)
     run_data: dict[str, Any] = {
         "scenario_id": scenario_id,
         "project_id": project_id,
@@ -432,12 +432,12 @@ async def calculate_scenario(
 
         # If this is a Drive-backed scenario, also drop the output in Drive/Outputs/
         output_drive_id: str | None = None
-        if store.kind == scenario_store.STORAGE_KIND_DRIVE_XLSX and user_token:
+        if store.kind == pack_store.STORAGE_KIND_DRIVE_XLSX and user_token:
             try:
                 folders = _resolve_drive_folders(project_id, proj, project_code, user_token)
                 output_drive_id = drive_service.upload_file(
                     folders["outputs"], out_filename, output_bytes,
-                    scenario_store.XLSX_MIME, user_access_token=user_token,
+                    pack_store.XLSX_MIME, user_access_token=user_token,
                 )
             except Exception:
                 # GCS copy is authoritative for the download URL; Drive is best-effort.
@@ -471,7 +471,7 @@ async def calculate_scenario(
             "updated_at": completed_at,
         })
 
-        return ScenarioRunResponse(
+        return AssumptionPackRunResponse(
             id=run_ref.id,
             scenario_id=scenario_id,
             project_id=project_id,
@@ -515,17 +515,17 @@ async def calculate_scenario(
 
 
 @router.get(
-    "/api/excel-projects/{project_id}/scenarios/{scenario_id}/runs",
-    response_model=list[ScenarioRunResponse],
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}/runs",
+    response_model=list[AssumptionPackRunResponse],
 )
 async def list_runs(project_id: str, scenario_id: str, current_user: CurrentUser):
     """List run history for a scenario (most recent first)."""
-    runs: list[ScenarioRunResponse] = []
+    runs: list[AssumptionPackRunResponse] = []
     for doc in _run_ref(project_id, scenario_id).order_by(
         "started_at", direction="DESCENDING"
     ).stream():
         d = doc.to_dict()
-        runs.append(ScenarioRunResponse(
+        runs.append(AssumptionPackRunResponse(
             id=doc.id,
             scenario_id=scenario_id,
             project_id=project_id,

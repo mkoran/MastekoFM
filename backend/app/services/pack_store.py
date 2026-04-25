@@ -27,7 +27,7 @@ STORAGE_KIND_DRIVE_XLSX = "drive_xlsx"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
-class ScenarioStore(Protocol):
+class AssumptionPackStore(Protocol):
     """Abstract backend for reading/writing Scenario (and Template) files."""
 
     kind: str
@@ -196,18 +196,18 @@ class DriveXlsxStore:
 # ─── Factory ──────────────────────────────────────────────────────────────────
 
 
-_STORES: dict[str, ScenarioStore] = {
+_STORES: dict[str, AssumptionPackStore] = {
     STORAGE_KIND_GCS: GCSStore(),
     STORAGE_KIND_DRIVE_XLSX: DriveXlsxStore(),
 }
 
 
-def get_store(kind: str | None) -> ScenarioStore:
+def get_store(kind: str | None) -> AssumptionPackStore:
     """Return the store adapter for a given kind; defaults to GCS."""
     return _STORES.get(kind or STORAGE_KIND_GCS, _STORES[STORAGE_KIND_GCS])
 
 
-def store_for_scenario(scn: dict[str, Any]) -> ScenarioStore:
+def store_for_scenario(scn: dict[str, Any]) -> AssumptionPackStore:
     """Pick the store for a scenario doc. Infers from stored fields as a fallback."""
     kind = scn.get("storage_kind")
     if kind:
@@ -216,3 +216,44 @@ def store_for_scenario(scn: dict[str, Any]) -> ScenarioStore:
     if scn.get("drive_file_id"):
         return get_store(STORAGE_KIND_DRIVE_XLSX)
     return get_store(STORAGE_KIND_GCS)
+
+
+# ── High-level loaders (Sprint B) ────────────────────────────────────────────
+# These centralize "given a Firestore doc for X, return its xlsx bytes". Used by
+# the runs router so route handlers don't have to know about storage internals.
+
+
+def load_model_bytes_compat(model: dict[str, Any]) -> bytes:
+    """Load a Model's xlsx bytes (Drive or GCS depending on what it has)."""
+    if model.get("drive_file_id"):
+        content = drive_service.download_file(model["drive_file_id"])
+        if content is None:
+            raise RuntimeError(f"Drive download failed for model file_id={model['drive_file_id']}")
+        return content
+    if model.get("storage_path"):
+        return storage_service.download_xlsx(model["storage_path"])
+    raise ValueError("Model has neither drive_file_id nor storage_path")
+
+
+def load_pack_bytes_compat(pack: dict[str, Any], *, user_token: str | None = None) -> bytes:
+    """Load an AssumptionPack's xlsx bytes."""
+    if pack.get("storage_kind") == STORAGE_KIND_DRIVE_XLSX or pack.get("drive_file_id"):
+        if not pack.get("drive_file_id"):
+            raise ValueError("Drive-backed pack has no drive_file_id")
+        content = drive_service.download_file(pack["drive_file_id"], user_access_token=user_token)
+        if content is None:
+            raise RuntimeError(f"Drive download failed for pack file_id={pack['drive_file_id']}")
+        return content
+    if pack.get("storage_path"):
+        return storage_service.download_xlsx(pack["storage_path"])
+    raise ValueError("AssumptionPack has neither drive_file_id nor storage_path")
+
+
+def load_output_template_bytes_compat(tpl: dict[str, Any], *, user_token: str | None = None) -> bytes:
+    """Load an OutputTemplate's xlsx bytes (Drive-only by design)."""
+    if not tpl.get("drive_file_id"):
+        raise ValueError("OutputTemplate must be Drive-backed")
+    content = drive_service.download_file(tpl["drive_file_id"], user_access_token=user_token)
+    if content is None:
+        raise RuntimeError(f"Drive download failed for output_template file_id={tpl['drive_file_id']}")
+    return content

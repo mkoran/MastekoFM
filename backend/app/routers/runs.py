@@ -1,5 +1,8 @@
 """Runs router — three-way composition execution.
 
+Sprint B: collections renamed (excel_templates → models, excel_projects → projects,
+scenarios → assumption_packs).
+
 Sprint A: synchronous. POST /api/runs blocks until the Run completes (~2s for
 Hello World, ~17s for Campus Adele). Sprint C wraps this in Cloud Tasks.
 
@@ -28,7 +31,7 @@ from backend.app.models.run import (
 )
 from backend.app.services import (
     drive_service,
-    pack_store_compat,
+    pack_store,
     run_executor,
     run_validator,
     storage_service,
@@ -47,8 +50,7 @@ def _runs_ref():
 
 def _model_doc(model_id: str) -> dict[str, Any] | None:
     prefix = settings.firestore_collection_prefix
-    # Sprint A: Models still live in `excel_templates` collection (rename in Sprint B)
-    doc = get_firestore_client().collection(f"{prefix}excel_templates").document(model_id).get()
+    doc = get_firestore_client().collection(f"{prefix}models").document(model_id).get()
     return doc.to_dict() if doc.exists else None
 
 
@@ -60,19 +62,17 @@ def _output_template_doc(tpl_id: str) -> dict[str, Any] | None:
 
 def _project_doc(project_id: str) -> dict[str, Any] | None:
     prefix = settings.firestore_collection_prefix
-    # Sprint A: Projects still live in `excel_projects` (rename in Sprint B)
-    doc = get_firestore_client().collection(f"{prefix}excel_projects").document(project_id).get()
+    doc = get_firestore_client().collection(f"{prefix}projects").document(project_id).get()
     return doc.to_dict() if doc.exists else None
 
 
 def _pack_doc(project_id: str, pack_id: str) -> dict[str, Any] | None:
     prefix = settings.firestore_collection_prefix
-    # Sprint A: AssumptionPacks still live as Scenarios under excel_projects (rename Sprint B)
     doc = (
         get_firestore_client()
-        .collection(f"{prefix}excel_projects")
+        .collection(f"{prefix}projects")
         .document(project_id)
-        .collection("scenarios")
+        .collection("assumption_packs")
         .document(pack_id)
         .get()
     )
@@ -80,7 +80,6 @@ def _pack_doc(project_id: str, pack_id: str) -> dict[str, Any] | None:
 
 
 def _classes_with_m(data: dict[str, Any]) -> dict[str, Any]:
-    """Patch a Firestore doc with m_tabs=[] if it predates Sprint A engine extension."""
     return {**data, "m_tabs": data.get("m_tabs", [])}
 
 
@@ -107,10 +106,7 @@ def _validate_or_404(
 
 @router.post("/api/runs/validate", response_model=RunValidateResponse)
 async def validate_run(body: RunValidateRequest, current_user: CurrentUser):
-    """Check whether a (model, pack, output_template) tuple is compatible.
-
-    Doesn't require a project context — used by the New Run modal as the user picks.
-    """
+    """Check whether a (model, pack, output_template) tuple is compatible."""
     model = _model_doc(body.model_id)
     if not model:
         return RunValidateResponse(compatible=False, errors=[f"Model {body.model_id} not found"])
@@ -119,12 +115,11 @@ async def validate_run(body: RunValidateRequest, current_user: CurrentUser):
         return RunValidateResponse(
             compatible=False, errors=[f"OutputTemplate {body.output_template_id} not found"]
         )
-    # Pack lookup needs a project — search across projects until we find it (cheap for now)
     pack = None
     prefix = settings.firestore_collection_prefix
-    for proj_doc in get_firestore_client().collection(f"{prefix}excel_projects").stream():
+    for proj_doc in get_firestore_client().collection(f"{prefix}projects").stream():
         candidate = (
-            proj_doc.reference.collection("scenarios")
+            proj_doc.reference.collection("assumption_packs")
             .document(body.assumption_pack_id)
             .get()
         )
@@ -144,126 +139,6 @@ async def validate_run(body: RunValidateRequest, current_user: CurrentUser):
 
 
 # ── Launch ───────────────────────────────────────────────────────────────────
-
-
-@router.post("/api/runs", response_model=RunResponse, status_code=201)
-async def create_run(body: RunCreate, request: Request, current_user: CurrentUser):
-    """Launch a Run (synchronous in Sprint A; Sprint C makes async)."""
-    model, pack, tpl = _validate_or_404(
-        body.model_id, body.project_id, body.assumption_pack_id, body.output_template_id
-    )
-
-    errors = run_validator.validate_run_composition(model, pack, tpl)
-    if errors:
-        raise HTTPException(status_code=400, detail={"errors": errors})
-
-    user_token = request.headers.get("X-MFM-Drive-Token")
-    started_at = datetime.now(UTC)
-    t0 = time.monotonic()
-
-    # Create Run doc immediately
-    run_ref = _runs_ref().document()
-    run_data: dict[str, Any] = {
-        "project_id": body.project_id,
-        "assumption_pack_id": body.assumption_pack_id,
-        "assumption_pack_version": pack.get("version", 1),
-        "assumption_pack_drive_revision_id": None,  # Sprint C+ records revisions
-        "model_id": body.model_id,
-        "model_version": model.get("version", 1),
-        "model_drive_revision_id": None,
-        "output_template_id": body.output_template_id,
-        "output_template_version": tpl.get("version", 1),
-        "output_template_drive_revision_id": None,
-        "status": "running",
-        "started_at": started_at,
-        "triggered_by": current_user["uid"],
-        "warnings": [],
-    }
-    run_ref.set(run_data)
-
-    try:
-        # Load all three artifacts via their respective stores
-        model_bytes = pack_store_compat.load_model_bytes(model)
-        pack_bytes = pack_store_compat.load_pack_bytes(pack, user_token=user_token)
-        tpl_bytes = pack_store_compat.load_output_template_bytes(tpl, user_token=user_token)
-
-        result = run_executor.execute_run_sync(
-            model_bytes=model_bytes,
-            pack_bytes=pack_bytes,
-            output_template_bytes=tpl_bytes,
-            output_template_format=tpl.get("format", "xlsx"),
-        )
-
-        # Persist output to GCS for stable URL
-        proj = _project_doc(body.project_id) or {}
-        project_code = storage_service.safe_name(
-            proj.get("code_name") or proj.get("name", ""), fallback=body.project_id
-        )
-        pack_code = pack.get("code_name", "pack")
-        tpl_code = tpl.get("code_name", "tpl")
-        ts = started_at.strftime("%Y%m%d_%H%M%S")
-        out_filename = f"{ts}_{project_code}_{pack_code}_{tpl_code}.xlsx"
-        out_path = f"runs/{run_ref.id}/{out_filename}"
-        download_url = storage_service.upload_xlsx(
-            out_path, result["output_bytes"], download_filename=out_filename
-        )
-
-        # Best-effort Drive upload too (so it shows up in the user's Drive)
-        output_drive_file_id: str | None = None
-        if user_token:
-            try:
-                root = (
-                    get_firestore_client()
-                    .collection(f"{settings.firestore_collection_prefix}settings")
-                    .document("app")
-                    .get()
-                    .to_dict()
-                    or {}
-                ).get("drive_root_folder_id") or settings.drive_root_folder_id
-                if root:
-                    folders = drive_service.ensure_project_folders(
-                        root, project_code, user_access_token=user_token
-                    )
-                    output_drive_file_id = drive_service.upload_file(
-                        folders["outputs"],
-                        out_filename,
-                        result["output_bytes"],
-                        XLSX_MIME,
-                        user_access_token=user_token,
-                    )
-            except Exception:
-                pass  # GCS is authoritative
-
-        completed_at = datetime.now(UTC)
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        updates = {
-            "status": "completed",
-            "completed_at": completed_at,
-            "duration_ms": duration_ms,
-            "output_storage_path": out_path,
-            "output_download_url": download_url,
-            "output_drive_file_id": output_drive_file_id,
-            "warnings": result["warnings"],
-        }
-        run_ref.update(updates)
-        return _to_response(run_ref.id, {**run_data, **updates})
-
-    except Exception as exc:
-        completed_at = datetime.now(UTC)
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        err = str(exc)
-        run_ref.update(
-            {
-                "status": "failed",
-                "completed_at": completed_at,
-                "duration_ms": duration_ms,
-                "error": err,
-            }
-        )
-        raise HTTPException(status_code=500, detail=f"Run failed: {err}") from exc
-
-
-# ── List / detail / retry ────────────────────────────────────────────────────
 
 
 def _to_response(doc_id: str, data: dict[str, Any]) -> RunResponse:
@@ -309,6 +184,122 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> RunSummary:
     )
 
 
+@router.post("/api/runs", response_model=RunResponse, status_code=201)
+async def create_run(body: RunCreate, request: Request, current_user: CurrentUser):
+    """Launch a Run (synchronous in Sprint A; Sprint C makes async)."""
+    model, pack, tpl = _validate_or_404(
+        body.model_id, body.project_id, body.assumption_pack_id, body.output_template_id
+    )
+
+    errors = run_validator.validate_run_composition(model, pack, tpl)
+    if errors:
+        raise HTTPException(status_code=400, detail={"errors": errors})
+
+    user_token = request.headers.get("X-MFM-Drive-Token")
+    started_at = datetime.now(UTC)
+    t0 = time.monotonic()
+
+    run_ref = _runs_ref().document()
+    run_data: dict[str, Any] = {
+        "project_id": body.project_id,
+        "assumption_pack_id": body.assumption_pack_id,
+        "assumption_pack_version": pack.get("version", 1),
+        "assumption_pack_drive_revision_id": None,
+        "model_id": body.model_id,
+        "model_version": model.get("version", 1),
+        "model_drive_revision_id": None,
+        "output_template_id": body.output_template_id,
+        "output_template_version": tpl.get("version", 1),
+        "output_template_drive_revision_id": None,
+        "status": "running",
+        "started_at": started_at,
+        "triggered_by": current_user["uid"],
+        "warnings": [],
+    }
+    run_ref.set(run_data)
+
+    try:
+        model_bytes = pack_store.load_model_bytes_compat(model)
+        pack_bytes = pack_store.load_pack_bytes_compat(pack, user_token=user_token)
+        tpl_bytes = pack_store.load_output_template_bytes_compat(tpl, user_token=user_token)
+
+        result = run_executor.execute_run_sync(
+            model_bytes=model_bytes,
+            pack_bytes=pack_bytes,
+            output_template_bytes=tpl_bytes,
+            output_template_format=tpl.get("format", "xlsx"),
+        )
+
+        proj = _project_doc(body.project_id) or {}
+        project_code = storage_service.safe_name(
+            proj.get("code_name") or proj.get("name", ""), fallback=body.project_id
+        )
+        pack_code = pack.get("code_name", "pack")
+        tpl_code = tpl.get("code_name", "tpl")
+        ts = started_at.strftime("%Y%m%d_%H%M%S")
+        out_filename = f"{ts}_{project_code}_{pack_code}_{tpl_code}.xlsx"
+        out_path = f"runs/{run_ref.id}/{out_filename}"
+        download_url = storage_service.upload_xlsx(
+            out_path, result["output_bytes"], download_filename=out_filename
+        )
+
+        output_drive_file_id: str | None = None
+        if user_token:
+            try:
+                root = (
+                    get_firestore_client()
+                    .collection(f"{settings.firestore_collection_prefix}settings")
+                    .document("app")
+                    .get()
+                    .to_dict()
+                    or {}
+                ).get("drive_root_folder_id") or settings.drive_root_folder_id
+                if root:
+                    folders = drive_service.ensure_project_folders(
+                        root, project_code, user_access_token=user_token
+                    )
+                    output_drive_file_id = drive_service.upload_file(
+                        folders["outputs"],
+                        out_filename,
+                        result["output_bytes"],
+                        XLSX_MIME,
+                        user_access_token=user_token,
+                    )
+            except Exception:
+                pass
+
+        completed_at = datetime.now(UTC)
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        updates = {
+            "status": "completed",
+            "completed_at": completed_at,
+            "duration_ms": duration_ms,
+            "output_storage_path": out_path,
+            "output_download_url": download_url,
+            "output_drive_file_id": output_drive_file_id,
+            "warnings": result["warnings"],
+        }
+        run_ref.update(updates)
+        return _to_response(run_ref.id, {**run_data, **updates})
+
+    except Exception as exc:
+        completed_at = datetime.now(UTC)
+        duration_ms = int((time.monotonic() - t0) * 1000)
+        err = str(exc)
+        run_ref.update(
+            {
+                "status": "failed",
+                "completed_at": completed_at,
+                "duration_ms": duration_ms,
+                "error": err,
+            }
+        )
+        raise HTTPException(status_code=500, detail=f"Run failed: {err}") from exc
+
+
+# ── List / detail / retry ────────────────────────────────────────────────────
+
+
 @router.get("/api/runs", response_model=list[RunSummary])
 async def list_runs(
     current_user: CurrentUser,
@@ -335,7 +326,6 @@ async def get_run(run_id: str, current_user: CurrentUser):
 
 @router.post("/api/runs/{run_id}/retry", response_model=RunResponse, status_code=201)
 async def retry_run(run_id: str, request: Request, current_user: CurrentUser):
-    """Create a new Run with same composition. retry_of points at the original."""
     doc = _runs_ref().document(run_id).get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Run not found")
@@ -346,7 +336,6 @@ async def retry_run(run_id: str, request: Request, current_user: CurrentUser):
         model_id=src["model_id"],
         output_template_id=src["output_template_id"],
     )
-    # Re-launch (sync) — copy the create logic but tag retry_of
     response = await create_run(body=body, request=request, current_user=current_user)
     _runs_ref().document(response.id).update({"retry_of": run_id})
     return await get_run(run_id=response.id, current_user=current_user)

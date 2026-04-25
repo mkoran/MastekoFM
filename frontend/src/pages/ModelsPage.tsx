@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
-interface ExcelTemplateSummary {
+interface ModelSummary {
   id: string
   name: string
   code_name: string
@@ -16,7 +16,7 @@ interface ExcelTemplateSummary {
 
 export default function ExcelTemplatesPage() {
   const { token } = useAuth()
-  const [templates, setTemplates] = useState<ExcelTemplateSummary[]>([])
+  const [templates, setTemplates] = useState<ModelSummary[]>([])
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [uploading, setUploading] = useState(false)
   const [name, setName] = useState('')
@@ -25,7 +25,7 @@ export default function ExcelTemplatesPage() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = () => {
-    api.get<ExcelTemplateSummary[]>('/excel-templates').then(setTemplates).catch(() => setTemplates([]))
+    api.get<ModelSummary[]>('/models').then(setTemplates).catch(() => setTemplates([]))
   }
 
   useEffect(load, [])
@@ -47,7 +47,7 @@ export default function ExcelTemplatesPage() {
       fd.append('name', name)
       fd.append('code_name', codeName)
       fd.append('description', description)
-      const resp = await fetch('/api/excel-templates', {
+      const resp = await fetch('/api/models', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: fd,
@@ -77,7 +77,7 @@ export default function ExcelTemplatesPage() {
   const handleDelete = async (id: string, n: string) => {
     if (!confirm(`Delete Excel Template "${n}"? Projects pinned to it will still reference the deleted template_id.`)) return
     try {
-      await api.delete(`/excel-templates/${id}`)
+      await api.delete(`/models/${id}`)
       load()
     } catch {
       setMessage({ text: 'Delete failed', type: 'error' })
