@@ -14,16 +14,23 @@ interface RunDetail {
   output_template_version: number
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   started_at: string
+  enqueued_at: string | null
+  running_at: string | null
   completed_at: string | null
   duration_ms: number | null
+  attempts: number
+  task_name: string | null
   output_storage_path: string | null
   output_download_url: string | null
   output_drive_file_id: string | null
   warnings: string[]
   error: string | null
   triggered_by: string
+  triggered_by_email: string | null
   retry_of: string | null
 }
+
+const TERMINAL_STATUSES = ['completed', 'failed', 'cancelled']
 
 const STATUS_COLOR: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-800',
@@ -45,6 +52,14 @@ export default function RunDetailPage() {
     api.get<RunDetail>(`/runs/${runId}`).then(setRun).catch((e) => setError(String(e)))
   }
   useEffect(load, [token, runId])
+
+  // Sprint C: poll while pending/running. Stops as soon as we hit a terminal
+  // status, so a completed run stops polling on the next tick.
+  useEffect(() => {
+    if (!run || TERMINAL_STATUSES.includes(run.status)) return
+    const handle = setInterval(load, 2000)
+    return () => clearInterval(handle)
+  }, [run?.status, runId, token])
 
   const handleRetry = async () => {
     if (!runId) return
@@ -85,8 +100,15 @@ export default function RunDetailPage() {
           <p className="text-xs text-gray-500">
             Started {new Date(run.started_at).toLocaleString()}{' '}
             {run.completed_at ? `· completed in ${run.duration_ms}ms` : ''}
+            {run.attempts > 1 ? ` · attempt ${run.attempts}` : ''}
             {run.retry_of ? <> · retry of <Link to={`/runs/${run.retry_of}`} className="text-blue-600 hover:underline">{run.retry_of.slice(0, 8)}…</Link></> : null}
           </p>
+          {!TERMINAL_STATUSES.includes(run.status) && (
+            <p className="mt-1 inline-flex items-center gap-1 text-xs text-blue-700">
+              <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-blue-500"></span>
+              Polling every 2s — page updates automatically when the run completes.
+            </p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {(run.status === 'failed' || run.status === 'completed') && (

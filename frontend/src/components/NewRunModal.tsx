@@ -243,7 +243,7 @@ export default function NewRunModal({ projectId, onClose, onRunComplete }: Props
             disabled={!canRun}
             className="rounded bg-green-600 px-4 py-1.5 text-sm text-white hover:bg-green-700 disabled:opacity-40"
           >
-            {running ? 'Running… (~2-20s)' : '▶ Run'}
+            {running ? 'Launching…' : '▶ Run'}
           </button>
         </div>
       </div>

@@ -77,8 +77,12 @@ class RunResponse(BaseModel):
     # Execution
     status: Literal["pending", "running", "completed", "failed", "cancelled"]
     started_at: datetime
+    enqueued_at: datetime | None = None  # Sprint C
+    running_at: datetime | None = None  # Sprint C
     completed_at: datetime | None = None
     duration_ms: int | None = None
+    attempts: int = 0  # Sprint C — retry tracking
+    task_name: str | None = None  # Sprint C — Cloud Tasks resource path
 
     # Result
     output_storage_path: str | None = None

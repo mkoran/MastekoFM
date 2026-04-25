@@ -1,27 +1,33 @@
 """Runs router — three-way composition execution.
 
-Sprint B: collections renamed (excel_templates → models, excel_projects → projects,
-scenarios → assumption_packs).
+Sprint C: POST /api/runs is now async. The handler:
+  1. Persists a Run doc with status=pending (+ user's Drive token, if any)
+  2. Enqueues a Cloud Tasks task that POSTs /internal/tasks/run/{id}
+     OR (if Cloud Tasks isn't configured — local dev / no queue yet) starts
+     a background thread that runs the same worker function inline
+  3. Returns 202 with the Run shape (status=pending). The frontend polls.
 
-Sprint A: synchronous. POST /api/runs blocks until the Run completes (~2s for
-Hello World, ~17s for Campus Adele). Sprint C wraps this in Cloud Tasks.
+The Cloud Tasks worker endpoint /internal/tasks/run/{id} lives here too,
+gated by the cloud_tasks dep (rejects browser callers).
 
 Endpoints:
-  POST   /api/runs                                launch a Run (sync for now)
+  POST   /api/runs                                launch a Run (async; returns 202)
   POST   /api/runs/validate                       check compatibility (no execution)
-  GET    /api/runs                                list (filter by project_id, status)
-  GET    /api/runs/{run_id}                       detail
+  GET    /api/runs                                list (filter by project_id, user, status)
+  GET    /api/runs/{run_id}                       detail (poll target)
   POST   /api/runs/{run_id}/retry                 new run with same composition
+  POST   /internal/tasks/run/{run_id}             Cloud Tasks worker (OIDC-only)
   GET    /api/projects/{project_id}/runs          per-project list
 """
-import time
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import status as http_status
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
+from backend.app.middleware.cloud_tasks import verify_cloud_tasks_request
 from backend.app.models.run import (
     RunCreate,
     RunResponse,
@@ -29,18 +35,15 @@ from backend.app.models.run import (
     RunValidateRequest,
     RunValidateResponse,
 )
+from backend.app.routers import _run_worker
 from backend.app.services import (
-    drive_service,
-    pack_store,
-    run_executor,
+    run_queue,
     run_validator,
-    storage_service,
 )
 
 router = APIRouter(tags=["runs"])
 
 CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
-XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 
 def _runs_ref():
@@ -156,8 +159,12 @@ def _to_response(doc_id: str, data: dict[str, Any]) -> RunResponse:
         output_template_drive_revision_id=data.get("output_template_drive_revision_id"),
         status=data.get("status", "pending"),
         started_at=data.get("started_at", datetime.now(UTC)),
+        enqueued_at=data.get("enqueued_at"),
+        running_at=data.get("running_at"),
         completed_at=data.get("completed_at"),
         duration_ms=data.get("duration_ms"),
+        attempts=data.get("attempts", 0),
+        task_name=data.get("task_name"),
         output_storage_path=data.get("output_storage_path"),
         output_download_url=data.get("output_download_url"),
         output_drive_file_id=data.get("output_drive_file_id"),
@@ -190,9 +197,17 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> RunSummary:
     )
 
 
-@router.post("/api/runs", response_model=RunResponse, status_code=201)
+@router.post("/api/runs", response_model=RunResponse, status_code=http_status.HTTP_202_ACCEPTED)
 async def create_run(body: RunCreate, request: Request, current_user: CurrentUser):
-    """Launch a Run (synchronous in Sprint A; Sprint C makes async)."""
+    """Sprint C: persist Run as `pending` + enqueue (or in-thread). Returns 202.
+
+    Frontend polls GET /api/runs/{id} until status terminal. The actual heavy
+    computation runs in either:
+      - Cloud Tasks worker (settings.runs_queue set) — production path
+      - Background thread (settings.runs_queue empty) — local / no queue yet
+
+    Either way the worker function is `_run_worker.execute_run_by_id`.
+    """
     model, pack, tpl = _validate_or_404(
         body.model_id, body.project_id, body.assumption_pack_id, body.output_template_id
     )
@@ -203,9 +218,8 @@ async def create_run(body: RunCreate, request: Request, current_user: CurrentUse
 
     user_token = request.headers.get("X-MFM-Drive-Token")
     started_at = datetime.now(UTC)
-    t0 = time.monotonic()
-
     proj_doc_for_name = _project_doc(body.project_id) or {}
+
     run_ref = _runs_ref().document()
     run_data: dict[str, Any] = {
         "project_id": body.project_id,
@@ -222,91 +236,55 @@ async def create_run(body: RunCreate, request: Request, current_user: CurrentUse
         "output_template_name": tpl.get("name"),
         "output_template_version": tpl.get("version", 1),
         "output_template_drive_revision_id": None,
-        "status": "running",
+        "status": "pending",
         "started_at": started_at,
+        "enqueued_at": started_at,
+        "attempts": 0,
         "triggered_by": current_user["uid"],
         "triggered_by_email": current_user.get("email", ""),
+        # Persist Drive token so worker (running in another process) can read
+        # Drive-backed packs/templates. Cleared on terminal status. ⚠ Token TTL
+        # is ~1h from issue — runs that take >55min will fail to read Drive.
+        "drive_token": user_token,
         "warnings": [],
     }
     run_ref.set(run_data)
 
+    # Dispatch: Cloud Tasks if configured, in-thread otherwise.
+    task_name = run_queue.enqueue_run(run_ref.id, drive_token=user_token)
+    if task_name is None:
+        # Sync mode: launch background thread so the HTTP request still returns 202.
+        run_queue.execute_in_thread(run_ref.id, drive_token=user_token)
+    else:
+        run_ref.update({"task_name": task_name})
+
+    return _to_response(run_ref.id, run_data)
+
+
+# ── Cloud Tasks worker endpoint ──────────────────────────────────────────────
+
+
+@router.post(
+    "/internal/tasks/run/{run_id}",
+    status_code=http_status.HTTP_200_OK,
+    dependencies=[Depends(verify_cloud_tasks_request)],
+)
+async def run_worker(run_id: str, request: Request) -> dict[str, Any]:
+    """Cloud Tasks invokes this. Browsers cannot — see verify_cloud_tasks_request.
+
+    Body (JSON): { "run_id": "...", "drive_token": "..." (optional) }
+    The drive_token is also persisted on the Run doc, so we accept either source.
+    """
     try:
-        model_bytes = pack_store.load_model_bytes_compat(model)
-        pack_bytes = pack_store.load_pack_bytes_compat(pack, user_token=user_token)
-        tpl_bytes = pack_store.load_output_template_bytes_compat(tpl, user_token=user_token)
-
-        result = run_executor.execute_run_sync(
-            model_bytes=model_bytes,
-            pack_bytes=pack_bytes,
-            output_template_bytes=tpl_bytes,
-            output_template_format=tpl.get("format", "xlsx"),
-        )
-
-        proj = _project_doc(body.project_id) or {}
-        project_code = storage_service.safe_name(
-            proj.get("code_name") or proj.get("name", ""), fallback=body.project_id
-        )
-        pack_code = pack.get("code_name", "pack")
-        tpl_code = tpl.get("code_name", "tpl")
-        ts = started_at.strftime("%Y%m%d_%H%M%S")
-        out_filename = f"{ts}_{project_code}_{pack_code}_{tpl_code}.xlsx"
-        out_path = f"runs/{run_ref.id}/{out_filename}"
-        download_url = storage_service.upload_xlsx(
-            out_path, result["output_bytes"], download_filename=out_filename
-        )
-
-        output_drive_file_id: str | None = None
-        if user_token:
-            try:
-                root = (
-                    get_firestore_client()
-                    .collection(f"{settings.firestore_collection_prefix}settings")
-                    .document("app")
-                    .get()
-                    .to_dict()
-                    or {}
-                ).get("drive_root_folder_id") or settings.drive_root_folder_id
-                if root:
-                    folders = drive_service.ensure_project_folders(
-                        root, project_code, user_access_token=user_token
-                    )
-                    output_drive_file_id = drive_service.upload_file(
-                        folders["outputs"],
-                        out_filename,
-                        result["output_bytes"],
-                        XLSX_MIME,
-                        user_access_token=user_token,
-                    )
-            except Exception:
-                pass
-
-        completed_at = datetime.now(UTC)
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        updates = {
-            "status": "completed",
-            "completed_at": completed_at,
-            "duration_ms": duration_ms,
-            "output_storage_path": out_path,
-            "output_download_url": download_url,
-            "output_drive_file_id": output_drive_file_id,
-            "warnings": result["warnings"],
-        }
-        run_ref.update(updates)
-        return _to_response(run_ref.id, {**run_data, **updates})
-
-    except Exception as exc:
-        completed_at = datetime.now(UTC)
-        duration_ms = int((time.monotonic() - t0) * 1000)
-        err = str(exc)
-        run_ref.update(
-            {
-                "status": "failed",
-                "completed_at": completed_at,
-                "duration_ms": duration_ms,
-                "error": err,
-            }
-        )
-        raise HTTPException(status_code=500, detail=f"Run failed: {err}") from exc
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    drive_token = body.get("drive_token") if isinstance(body, dict) else None
+    try:
+        _run_worker.execute_run_by_id(run_id, drive_token=drive_token)
+        return {"run_id": run_id, "status": "completed"}
+    except Exception as exc:  # noqa: BLE001 — return 500 so Cloud Tasks may retry
+        raise HTTPException(status_code=500, detail=f"Worker failed: {exc}") from exc
 
 
 # ── List / detail / retry ────────────────────────────────────────────────────
