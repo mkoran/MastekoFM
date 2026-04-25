@@ -1,158 +1,110 @@
 # MastekoFM — Session Handoff
 
-> Last updated: 2026-04-16
-> Live DEV version: 1.034
-> Branch: `epic/excel-template-mvp`
-> Phase: pre-Sprint-A (full plan committed; awaiting go-ahead to start Sprint A)
+> Last updated: 2026-04-25
+> Live DEV version: deploying v2.003 (Sprint A.5)
+> Current branch: `epic/sprint-b-cleanup` (carries Sprint B + INFRA-001 + A.5)
 
 ---
 
-## Where we are
+## What's been shipped (Sprints A → B → INFRA-001 → A.5)
 
-We just finished a major **redesign + planning pass** that pivots MastekoFM from a single-Template-per-Project model to a three-way composition platform:
+### Sprint A — Hello World vertical slice (v1.029 → v1.038)
+Three-way composition (`AssumptionPack × Model × OutputTemplate → Run`) working end-to-end on Hello World seed (Sum=12, Product=35, Total=47 verified live).
 
-```
-AssumptionPack  ×  Model  ×  OutputTemplate  →  Run  →  Output artifact
-```
+### Sprint B — Cleanup + Campus Adele migration (v2.000 → v2.002)
+- ~50% of legacy code deleted (TGV / DAG / Datasource / per-project Spreadsheets / Reports stubs)
+- Renamed: `ExcelTemplate→Model`, `ExcelProject→Project`, `Scenario→AssumptionPack`
+- Firestore collections renamed: `excel_templates→models`, `excel_projects→projects`, `scenarios→assumption_packs` (subcollection)
+- Project is now a thin org scope (no required Model binding; `default_model_id` is optional UX convenience)
+- API paths follow the rename
+- `seed/campus_adele/` committed with `build_campus_adele_seed.py` + 3 .xlsx files
+- `/api/seed/campus-adele` rewritten under new collections
 
-The pivot is documented in [docs/REDESIGN_2026_04.md](docs/REDESIGN_2026_04.md), the architecture in [ARCHITECTURE.md](ARCHITECTURE.md), and the implementation plan in [BACKLOG.md](BACKLOG.md). Eight sprints are scoped in [docs/sprints/](docs/sprints/).
+### Sprint INFRA-001 — CI/CD scaffolding (no version bump, file additions)
+- `scripts/infra/setup_github_wif.sh` one-shot setup (Marc runs once)
+- `.github/workflows/ci.yml` (LibreOffice install added so engine tests run)
+- `.github/workflows/deploy-dev.yml` (auto-deploys on push to `epic/**`)
+- `.github/workflows/deploy-prod.yml` (manual approval via GitHub Environment)
+- `.github/workflows/pr-preview.yml` (7-day Hosting preview per PR)
+- `docs/sprints/SPRINT_INFRA_001_cicd.md` walkthrough
 
-**Nothing has been deleted yet.** The current DEV (v1.034) still works exactly as before. The next step is Sprint A — a working Hello World vertical slice built alongside the legacy code so Marc can review the new UI before Sprint B does the deletes.
+### Sprint A.5 — Tree Navigator (v2.003)
+- Backend: `services/tree_browser.py` + 4 endpoints in `routers/tree.py`
+- Frontend: `pages/TreePage.tsx` — left tree (lazy expand, filter, URL-as-state) + right detail pane
+- 6 detail components: Project, Pack, Inputs (grouped by tab), Outputs (latest run), Runs, CellDetail (single-cell + history time-series)
+- Layout: 🌳 Tree Navigator added at the top of the nav
 
 ---
 
-## What's currently working on DEV (v1.034)
+## State of the codebase
 
-Sign in at https://dev-masteko-fm.web.app with Google (any domain — OAuth is in Production mode).
-
-| Feature | Status |
+| Metric | Value |
 |---|---|
-| Excel Template upload (case-sensitive `I_`/`O_` tab classification) | ✅ |
-| Excel Project create/list | ✅ |
-| Scenario create — GCS-backed or Drive-backed (Office mode editable) | ✅ |
-| **"Edit in Google Sheets"** opens scenario .xlsx in Sheets without conversion | ✅ |
-| Calculate: overlay scenario I_ tabs onto Template, LibreOffice recalc | ✅ |
-| Run history with input file + output download links | ✅ |
-| Settings: Drive folder picker, storage-kind default, Test Drive Connection | ✅ |
-| Multi-domain Google Sign-In | ✅ |
-| `firebase.json` no-cache index.html + immutable assets | ✅ |
-| Custom header `X-MFM-Drive-Token` (avoids Fastly stripping `X-Google-*`) | ✅ |
-| API client polls for Firebase token (3s window, fixes auth race) | ✅ |
-| 102/102 backend tests passing | ✅ |
-| ruff clean | ✅ |
-| CI green on `epic/excel-template-mvp` | ✅ |
+| Backend tests passing | **66/66** (down from 125 — legacy tests deleted in B) |
+| ruff | clean |
+| Frontend build | clean (~464 KB / ~121 KB gzipped, 68 modules) |
+| Backend routers | 10 (assumption_packs, auth, health, models, output_templates, projects, runs, seed, settings, tree) |
+| Backend models | 5 (model, project, assumption_pack, output_template, run, user) |
+| Backend services | 7 (drive_service, excel_engine, excel_template_engine, pack_store, run_executor, run_validator, storage_service, tree_browser) |
+| Frontend pages | 7 (Login, ProjectsPage, ProjectView, ModelsPage, OutputTemplatesPage, RunsPage, RunDetailPage, SettingsPage, TreePage) |
+| Lines of code deleted in this session | ~4,000 |
+| Lines of code added this session | ~3,500 (mostly tree + CI/CD + new entity routers) |
 
-### Verified live on DEV
+---
 
-- Campus Adele Project (id: `WILJkqx44RYhtberWGSV`) with Base + Optimistic + Drive Test scenarios
-- Drive Test scenario: Drive-backed, calculated successfully (~18s), output produced full workbook, opens in Sheets in Office mode
+## What's currently live on DEV
 
-### Known limitations to be addressed by upcoming sprints
+- https://dev-masteko-fm.web.app
+- Cloud Run service: `masteko-fm-api-dev` (v2.003 once deploy completes)
+- Firestore collections (active): `dev_projects`, `dev_models`, `dev_output_templates`, `dev_runs`, `dev_settings`, `dev_projects/*/assumption_packs`
+- Firestore collections (orphan from v1.x — re-seed or migrate):
+  - `dev_excel_templates`, `dev_excel_projects`, `dev_excel_projects/*/scenarios`
+  - `dev_assumption_templates`, `dev_template_groups` (TGV legacy)
 
-| Limitation | Resolved by |
+To start clean post-deploy:
+1. Sign in to dev-masteko-fm.web.app with Google
+2. POST `/api/seed/helloworld` (with X-MFM-Drive-Token)
+3. POST `/api/seed/campus-adele` (with X-MFM-Drive-Token)
+4. Tree Navigator at /tree shows both projects, all their packs, inputs, outputs, runs
+
+---
+
+## What Marc needs to do to activate CI/CD (Sprint INFRA-001)
+
+See [docs/sprints/SPRINT_INFRA_001_cicd.md](docs/sprints/SPRINT_INFRA_001_cicd.md).
+
+Summary: ~15 minutes one-time:
+1. `./scripts/infra/setup_github_wif.sh` (creates SA + WIF pool, prints the values)
+2. Add 6 GitHub repository variables (paste values from script output)
+3. Add 1 GitHub repository secret (`FIREBASE_SERVICE_ACCOUNT` JSON)
+4. Create GitHub Environment "production" with required reviewers (yourself)
+5. (Optional) Branch protection on main
+
+After that: every push to `epic/*` auto-deploys to DEV. PROD deploys = button click + your approval.
+
+---
+
+## Outstanding from the just-finished sprints
+
+| Item | Why deferred |
 |---|---|
-| Project↔Template is rigidly 1:1 | Sprint A (three-way composition) |
-| No OutputTemplate concept; output = full Model workbook | Sprint A |
-| Calculate is synchronous (~17s blocks the request) | Sprint C |
-| No PDF/Word/Google Doc outputs | Sprints D / H |
-| No multi-user permissions (any signed-in user sees all projects) | Sprint E |
-| Legacy TGV nav still in code behind `?legacy=1` flag | Sprint B (delete) |
-| Existing Optimistic/Base scenarios are GCS-backed, not Drive-backed | Sprint B (re-seed) |
+| Re-seed Hello World + Campus Adele on DEV after v2.003 deploy completes | Awaiting deploy + Marc's Google token |
+| End-to-end smoke test of the Tree Navigator UI | Awaiting deploy + seed |
+| Merge `epic/sprint-b-cleanup` into `main` | Pending Marc's review of UX |
+| Old Firestore collections (`dev_excel_*`, `dev_template_groups`, `dev_assumption_templates`) | Orphaned; can be deleted via console or a one-shot script |
 
 ---
 
-## What changed in this session
+## What's next per BACKLOG
 
-1. **Redesigned the system** from "one Template per Project" to "three-way composition `(AssumptionPack × Model × OutputTemplate)`"
-2. **Introduced the `M_*` tab prefix** for OutputTemplate inputs (cells filled by Model `O_*` outputs) — see [docs/architecture/tab_prefix_contract.md](docs/architecture/tab_prefix_contract.md)
-3. **Designed the Hello World vertical slice** — three tiny .xlsx files that exercise the entire pipeline
-4. **Wrote 8 sprint plans** covering the full path from Hello World → Cleanup → Async → PDF → Multi-user → JSON packs → Sensitivity → Word/GoogleDoc
-5. **Captured the strategic context** in [docs/REDESIGN_2026_04.md](docs/REDESIGN_2026_04.md) so a new dev/agent understands the "why"
-6. **Documented every architectural decision** in ARCHITECTURE.md § 13 (Standing decisions table)
-7. **Updated CLAUDE.md** with new development rules: tab-prefix discipline, three-way validation, async runs, custom-header gotcha, cache-control rules
-
----
-
-## What to do next
-
-### Immediate next step
-
-Start **Sprint A — Hello World vertical slice**.
-
-Detailed plan: [docs/sprints/SPRINT_A_helloworld_slice.md](docs/sprints/SPRINT_A_helloworld_slice.md)
-
-Estimated effort: ~5 days
-Branch off: `epic/excel-template-mvp`
-Branch name: `epic/sprint-a-helloworld`
-
-After Sprint A is deployed to DEV, Marc reviews the UI walkthrough. If the three-way composition feels right, proceed to Sprint B (cleanup). If not, iterate on the UX before deleting anything.
-
-### Sprint A first task
-
-- A-001: Create `seed/helloworld/` with three tiny .xlsx files
-  - `helloworld_model.xlsx` — `I_Numbers` (a, b), `Calc` (sum, product), `O_Results` (sum, product)
-  - `helloworld_inputs.xlsx` — `I_Numbers` only with a=5, b=7
-  - `helloworld_report.xlsx` — `M_Results` (placeholder cells), `O_Report` (final output: "Sum: 12, Product: 35, Total: 47")
-
-These files become both seed data AND test fixtures. Commit them to the repo.
-
----
-
-## Key file locations (for the next dev/agent)
-
-| File | Purpose |
-|---|---|
-| [README.md](README.md) | Top-level pitch + quick links |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Full architecture, data model, repo layout, standing decisions |
-| [BACKLOG.md](BACKLOG.md) | All 8 sprints with story-level breakdown |
-| [CLAUDE.md](CLAUDE.md) | Mandatory development rules (tab discipline, deploys, git, etc.) |
-| [LESSONS_LEARNED.md](LESSONS_LEARNED.md) | Bugs and gotchas inherited from MastekoDWH + this session's lessons |
-| [docs/REDESIGN_2026_04.md](docs/REDESIGN_2026_04.md) | Strategic context for the pivot |
-| [docs/architecture/three_way_composition.md](docs/architecture/three_way_composition.md) | The composition pattern explained |
-| [docs/architecture/tab_prefix_contract.md](docs/architecture/tab_prefix_contract.md) | Tab naming + author rules |
-| [docs/architecture/run_pipeline.md](docs/architecture/run_pipeline.md) | The two-stage execution algorithm |
-| [docs/sprints/SPRINT_A_helloworld_slice.md](docs/sprints/SPRINT_A_helloworld_slice.md) | Imminent next sprint |
-| `backend/app/services/excel_template_engine.py` | The engine (overlay, classify, validate). DO NOT regress. |
-| `backend/app/services/scenario_store.py` | Will be renamed to `pack_store.py` in Sprint B; pattern stays |
-| `backend/app/routers/excel_templates.py` | Will be renamed to `models.py` in Sprint B |
-| `backend/app/routers/scenarios.py` | Will be renamed to `assumption_packs.py` in Sprint B |
-| `backend/app/routers/excel_projects.py` | Will be renamed to `projects.py` in Sprint B (and slimmed) |
-| `firebase.json` | Cache-control config — DO NOT remove the headers block |
-| `frontend/src/services/api.ts` | Token-wait + custom header — DO NOT regress |
-
----
-
-## Git state
-
-```
-Branch: epic/excel-template-mvp
-Most recent commits:
-  d7890b9 feat: Settings usability — Drive folder link, refresh-sign-in; no-cache index.html
-  e5e5e94 fix: rename OAuth header X-Google-Access-Token -> X-MFM-Drive-Token
-  ca90ac0 debug: log headers on /api/settings/test-drive (then removed)
-  783dfd8 fix: wait up to 3s for Firebase token before API call + ExcelProjectView token dep
-  30fcfa5 feat: dual-storage Scenarios (GCS + Drive .xlsx), Edit in Sheets
-  546f6ae chore: bump version to 1.029
-  8dc43de feat: Excel Template MVP — tab-prefix architecture (I_/O_/calc)
-```
-
-The next planning commit (this session) will add ~12 markdown files documenting the redesign and sprints.
-
----
-
-## Running locally
-
-```bash
-cd "/Users/marckoran/My Drive (marc.koran@gmail.com)/MASTEKO/MSKCompanies/MarcKoran/CURSOR_AI/MastekoFM"
-source .venv/bin/activate
-pytest                          # 102/102 should pass
-ruff check backend tests        # All checks passed
-cd frontend && npm run build    # Should build clean
-
-# To run the whole stack locally:
-DEV_AUTH_BYPASS=true uvicorn backend.app.main:app --reload &
-cd frontend && npm run dev
-```
+| Sprint | Goal | Status |
+|---|---|---|
+| Sprint C | Async runs via Cloud Tasks worker | ready to start |
+| Sprint D | PDF OutputTemplates via WeasyPrint | ready to start (parallel to C) |
+| Sprint E | Multi-user permissions + Drive folder sharing | ready to start (after B) |
+| Sprint F | JSON AssumptionPacks + Airtable connector | ready to start |
+| Sprint G | Sensitivity sweeps + comparison UI | needs C first |
+| Sprint H | Word + Google Doc OutputTemplates | needs D first |
 
 ---
 

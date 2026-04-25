@@ -10,8 +10,10 @@
 
 | Sprint | Goal | Size | Dependencies |
 |---|---|---|---|
-| **A** | Hello World vertical slice — three-way composition runs end-to-end on tiny example | M (~5 days) | none |
-| **B** | Cleanup + Campus Adele migration — delete ~50% of legacy code, re-seed Campus Adele under new schema | M (~3-4 days) | A approved |
+| **A** | Hello World vertical slice — three-way composition runs end-to-end on tiny example | M (~5 days) | none — **✅ shipped v1.038** |
+| **B** | Cleanup + Campus Adele migration — delete ~50% of legacy code, re-seed Campus Adele under new schema | M (~3-4 days) | A approved — **✅ shipped v2.001** |
+| **A.5** | Tree Navigator — hierarchical browser (Project → Pack → Inputs/Outputs/Runs → cells) | M (~3-4 days) | B — **✅ shipped v2.003** |
+| **INFRA-001** | CI/CD via GitHub Actions + Workload Identity Federation — auto-deploy on push, no re-auth | S (~1 day) | B — **✅ scaffolding shipped, awaits Marc setup** |
 | **C** | Async runs via Cloud Tasks — POST returns immediately, worker processes, status polling | M (~4-5 days) | B |
 | **D** | PDF OutputTemplates — WeasyPrint + first investor summary template for Campus Adele | S (~2-3 days) | B (can run parallel with C) |
 | **E** | Multi-user permissions — Project members, owner/editor/viewer roles, Drive sharing automation | M (~4-5 days) | B |

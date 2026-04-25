@@ -256,3 +256,36 @@ Campus Adele takes ~17s synchronously. Cloud Run's request timeout default is 60
 
 ### Test with the REAL fixture, not synthetic
 Our 18 engine tests use the actual Campus Adele `.xlsx` (476 KB, 15 tabs, 13,000+ formulas). Synthetic tests would have missed the MergedCell issue, the case-sensitive prefix issue, and the cross-tab formula behavior. Real fixtures are gold.
+
+---
+
+## 7. Sprint B / Sprint A.5 / INFRA-001 (2026-04-25)
+
+### Bulk renames need test runs after EACH replacement step ⚡
+A 17-replacement bulk script that ran in one shot caused 4 separate compile errors:
+1. `class Scenario` → `class AssumptionPack` plus `ScenarioRunResponse` → `PackRunResponse` ran in same pass, producing `class AssumptionAssumptionPackRunResponse` (double substitution)
+2. `ScenarioStore` Protocol class became `AssumptionPackStore`, but type annotations on `_STORES` dict + `get_store()` and `store_for_scenario()` returns still said `ScenarioStore`
+3. Internal collection refs `f"{prefix}excel_templates"` weren't all caught by the script's pattern matching
+4. The `backend/app/connectors/` directory wasn't in my delete list — Cloud Build caught it with a ruff failure
+
+**Lesson**: after any bulk rename touching N files, run `pytest && ruff check` BEFORE committing. The cost of running tests is seconds; the cost of a failed Cloud Build is minutes.
+
+### Don't forget hidden subdirectories on bulk delete ⚡
+`rm -v <list>` only removes files explicitly listed. Subdirectories importing deleted modules (like `backend/app/connectors/`) silently survive. Whenever you delete a category of code, do `find . -name "__init__.py" | xargs grep -l "from backend.app.models.deleted_module"` to catch stragglers.
+
+### Cloud Build's test stage is the safety net ⚡
+Cloud Run deploy = Cloud Build = `Dockerfile`'s test stage = `ruff check` + `pytest`. If local tests pass but Cloud Build fails, it's almost always: a file you forgot existed, a dependency mismatch between local venv and `backend/requirements.txt`, or a path that's case-sensitive on Linux but not Mac. Trust the test stage.
+
+### `Path(__file__).resolve().parents[N]` breaks in containers if you forget to COPY directories ⚡
+`backend/app/routers/seed.py` calculates `REPO_ROOT = Path(__file__).resolve().parents[3]` to find `seed/`. This works on dev but fails in Docker if `COPY seed/` is missing from the Dockerfile. The error is "Seed file missing: /app/seed/helloworld/...". Always COPY all dirs the runtime needs, not just `backend/app/`.
+
+### Workload Identity Federation > service account JSON keys ⚡
+For GitHub Actions ↔ GCP, WIF means zero long-lived secrets. The setup is one shell script (Service Account + IAM bindings + Workload Identity Pool + Provider + Repo binding), one set of GitHub repository variables (no secrets), and `google-github-actions/auth@v2` in the workflow. Done.
+
+Firebase Hosting still needs a service account JSON because Firebase doesn't fully support WIF for hosting deploys yet. That's one secret in GitHub Actions. Acceptable.
+
+### LibreOffice in CI matters ⚡
+Local pytest skips engine tests if LibreOffice isn't present. Cloud Build runs the test stage with `libreoffice-calc-nogui` installed, so engine tests run. GitHub Actions CI must also `apt-get install libreoffice-calc-nogui` BEFORE `pytest` or the engine tests just silently skip. They've caught two real bugs in the engine — don't lose them in CI.
+
+### A "thin org scope" entity is a useful pattern ⚡
+Sprint B refactor: `Project` was bound 1:1 to a Model (rigid). The redesign made `Project` a thin org scope: members, Drive folder, optional `default_model_id` for UX convenience. AssumptionPacks belong to Projects, but Models and OutputTemplates float free at workspace level. This separation made the three-way composition (Project + Pack + Model + OutputTemplate) much cleaner.
