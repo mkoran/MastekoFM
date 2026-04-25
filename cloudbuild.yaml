@@ -50,6 +50,7 @@ steps:
     args:
       - '-c'
       - |
+        echo "Deploy summary: env=${_ENVIRONMENT} version=${_VERSION} auto_rollback=${_AUTO_ROLLBACK}"
         SERVICE_URL=$(gcloud run services describe ${_SERVICE_NAME} --region=northamerica-northeast1 --format="value(status.url)")
         echo "Testing $${SERVICE_URL}/health"
         STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$${SERVICE_URL}/health")
@@ -65,6 +66,11 @@ substitutions:
   _VERSION: '1.000'
   _DEV_AUTH_BYPASS: 'true'
   _FIRESTORE_PREFIX: 'dev_'
+  # Sprint UX-01: declared so deploy-prod.sh can pass it; no rollback logic
+  # implemented yet — the value is logged but not acted on. Real rollback would
+  # require a post-deploy verification step + `gcloud run services update-traffic`
+  # to the previous revision. Tracked as future work.
+  _AUTO_ROLLBACK: 'false'
 
 options:
   logging: CLOUD_LOGGING_ONLY

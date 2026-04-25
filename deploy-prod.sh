@@ -35,17 +35,25 @@ npm run build
 cd "$SCRIPT_DIR"
 
 echo ""
-echo "Submitting Cloud Build (PROD, auto-rollback enabled)..."
+echo "Submitting Cloud Build (PROD)..."
 # CRITICAL: explicitly override DEV defaults from cloudbuild.yaml. Without these
 # the PROD service would run with DEV_AUTH_BYPASS=true (security hole) AND write
 # to dev_* Firestore collections (data corruption).
-BUILD_OUTPUT=$(gcloud builds submit \
+SUBMIT_LOG=$(mktemp)
+if ! gcloud builds submit \
     --project="$PROJECT_ID" \
     --config=cloudbuild.yaml \
     --substitutions="_SERVICE_NAME=$SERVICE_NAME,_ENVIRONMENT=prod,_VERSION=$VERSION,_AUTO_ROLLBACK=true,_DEV_AUTH_BYPASS=false,_FIRESTORE_PREFIX=prod_" \
     --async \
     --format="value(id)" \
-    2>&1)
+    > "$SUBMIT_LOG" 2>&1; then
+    echo "ERROR: gcloud builds submit failed:"
+    cat "$SUBMIT_LOG"
+    rm -f "$SUBMIT_LOG"
+    exit 1
+fi
+BUILD_OUTPUT=$(cat "$SUBMIT_LOG")
+rm -f "$SUBMIT_LOG"
 
 BUILD_ID=$(echo "$BUILD_OUTPUT" | tail -1)
 echo "Build ID: $BUILD_ID"
