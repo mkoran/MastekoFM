@@ -5,7 +5,7 @@ steps:
       - '-c'
       - |
         pip install ruff
-        ruff check backend/ tests/
+        ruff check backend/ tests/ scripts/smoke/
 
   - name: 'python:3.12-slim'
     entrypoint: 'bash'
