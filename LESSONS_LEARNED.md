@@ -289,3 +289,16 @@ Local pytest skips engine tests if LibreOffice isn't present. Cloud Build runs t
 
 ### A "thin org scope" entity is a useful pattern ⚡
 Sprint B refactor: `Project` was bound 1:1 to a Model (rigid). The redesign made `Project` a thin org scope: members, Drive folder, optional `default_model_id` for UX convenience. AssumptionPacks belong to Projects, but Models and OutputTemplates float free at workspace level. This separation made the three-way composition (Project + Pack + Model + OutputTemplate) much cleaner.
+
+### Bulk-rename sprints leave field-name landmines ⚡ (Sprint UX-01)
+Sprint B renamed `template_id → default_model_id` on Project. The Project router and seed code were updated, but `assumption_packs.py` still read `proj.get("template_id", "")`. Empty string went to a Firestore document lookup → 500. Two production bugs (Create Pack 500 + Calculate no-op) traced to the same one-character oversight. The fix made the search-and-replace step doubly cheap to verify in future renames:
+1. Read with `proj.get("default_model_id") or proj.get("template_id")` so legacy docs continue to work
+2. Surface 400 (not 500) when the required field is missing on the new shape, with a message that points to the alternative endpoint
+3. Pin a regression test that would fail if the field name regresses (`tests/test_assumption_packs_router.py`)
+**Lesson:** after a bulk rename, grep the **old** name across the repo, not the new one.
+
+### Make smoke tests a single script, not workflow inline curl ⚡ (Sprint UX-01)
+We had three places running similar curl `/health` checks: `deploy-dev.yml`, `deploy-prod.yml`, `deploy-dev.sh`. They drifted over A.5 (PROD didn't smoke `/api/health/full`, dev script didn't check Hosting). UX-01 consolidated to `scripts/smoke/post_deploy_smoke.sh` so adding a new smoke check (Tree endpoints, frontend HTML check, archive filter) is a one-file edit and all three deploy paths benefit. Also makes "what gets smoke-tested" a one-grep question.
+
+### Audit fields are cheaper to add early than to backfill ⚡ (Sprint UX-01)
+Sprint A persisted `created_by` (uid only). Three sprints later, the Projects list needed a "Created By" column showing the email. Adding `created_by_email` was a 5-minute schema change but every existing Firestore doc shows `—` until backfilled. Same story for `triggered_by_email` on Run. Going forward: every new entity gets `created_by`, `created_by_email`, `created_at`, `updated_at`, `archived` from day one — they're cheap fields with high optionality.

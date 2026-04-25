@@ -1,7 +1,13 @@
-import { useEffect, useState } from 'react'
-import { Link } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+
+/**
+ * Sprint UX-01-14: Run history filterable by Project, by User (email), and by Status.
+ * Sorted descending by started_at (default). Project filter syncs to ?project_id=
+ * in the URL so the Projects-list "Runs" link can deep-link straight here.
+ */
 
 interface RunSummary {
   id: string
@@ -19,7 +25,10 @@ interface RunSummary {
   duration_ms: number | null
   output_download_url: string | null
   triggered_by: string
+  triggered_by_email: string | null
 }
+
+interface ProjectSummary { id: string; name: string }
 
 const STATUS_COLOR: Record<string, string> = {
   pending: 'bg-yellow-100 text-yellow-800',
@@ -31,21 +40,48 @@ const STATUS_COLOR: Record<string, string> = {
 
 export default function RunsPage() {
   const { token } = useAuth()
+  const [params, setParams] = useSearchParams()
+  const projectIdFilter = params.get('project_id') || ''
+  const userFilter = params.get('triggered_by_email') || ''
+  const statusFilter = params.get('status') || ''
+
   const [runs, setRuns] = useState<RunSummary[]>([])
-  const [statusFilter, setStatusFilter] = useState<string>('')
+  const [projects, setProjects] = useState<ProjectSummary[]>([])
   const [loading, setLoading] = useState(false)
+
+  useEffect(() => {
+    api.get<ProjectSummary[]>('/projects').then(setProjects).catch(() => setProjects([]))
+  }, [])
 
   const load = () => {
     if (!token) return
     setLoading(true)
-    const q = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : ''
-    api.get<RunSummary[]>(`/runs${q}`)
+    const qs: string[] = []
+    if (projectIdFilter) qs.push(`project_id=${encodeURIComponent(projectIdFilter)}`)
+    if (userFilter) qs.push(`triggered_by_email=${encodeURIComponent(userFilter)}`)
+    if (statusFilter) qs.push(`status=${encodeURIComponent(statusFilter)}`)
+    qs.push('limit=200')
+    api.get<RunSummary[]>(`/runs?${qs.join('&')}`)
       .then(setRuns)
       .catch(() => setRuns([]))
       .finally(() => setLoading(false))
   }
 
-  useEffect(load, [token, statusFilter])
+  useEffect(load, [token, projectIdFilter, userFilter, statusFilter])
+
+  const userOptions = useMemo(() => {
+    const set = new Set<string>()
+    runs.forEach((r) => { if (r.triggered_by_email) set.add(r.triggered_by_email) })
+    return Array.from(set).sort()
+  }, [runs])
+
+  const setParam = (k: string, v: string) => {
+    const next = new URLSearchParams(params)
+    if (v) next.set(k, v); else next.delete(k)
+    setParams(next, { replace: true })
+  }
+
+  const projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? id.slice(0, 8) + '…'
 
   return (
     <div className="p-6">
@@ -53,13 +89,27 @@ export default function RunsPage() {
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">Runs</h1>
           <p className="mt-1 text-sm text-gray-600">
-            Every three-way composition execution. Each Run is immutable.
+            Every three-way composition execution. Each Run is immutable. Sorted newest first.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-end gap-3">
           <label className="text-xs text-gray-600">
-            Status:{' '}
-            <select className="rounded border px-2 py-1 text-xs" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+            Project
+            <select className="ml-1 rounded border px-2 py-1 text-xs" value={projectIdFilter} onChange={(e) => setParam('project_id', e.target.value)}>
+              <option value="">all</option>
+              {projects.map((p) => (<option key={p.id} value={p.id}>{p.name}</option>))}
+            </select>
+          </label>
+          <label className="text-xs text-gray-600">
+            User
+            <select className="ml-1 rounded border px-2 py-1 text-xs" value={userFilter} onChange={(e) => setParam('triggered_by_email', e.target.value)}>
+              <option value="">all</option>
+              {userOptions.map((u) => (<option key={u} value={u}>{u}</option>))}
+            </select>
+          </label>
+          <label className="text-xs text-gray-600">
+            Status
+            <select className="ml-1 rounded border px-2 py-1 text-xs" value={statusFilter} onChange={(e) => setParam('status', e.target.value)}>
               <option value="">all</option>
               <option value="pending">pending</option>
               <option value="running">running</option>
@@ -78,12 +128,12 @@ export default function RunsPage() {
         <table className="w-full text-sm">
           <thead className="bg-gray-50 text-left text-xs text-gray-600">
             <tr>
-              <th className="px-3 py-2">Started</th>
+              <th className="px-3 py-2">Started ▼</th>
               <th className="px-3 py-2">Status</th>
               <th className="px-3 py-2">Duration</th>
               <th className="px-3 py-2">Project</th>
               <th className="px-3 py-2">Model</th>
-              <th className="px-3 py-2">Inputs</th>
+              <th className="px-3 py-2">AssumptionPack</th>
               <th className="px-3 py-2">OutputTemplate</th>
               <th className="px-3 py-2">By</th>
               <th className="px-3 py-2">Output</th>
@@ -103,11 +153,11 @@ export default function RunsPage() {
                   </span>
                 </td>
                 <td className="px-3 py-2 text-xs">{r.duration_ms != null ? `${r.duration_ms}ms` : '—'}</td>
-                <td className="px-3 py-2 text-xs text-gray-500">{r.project_id.slice(0, 8)}…</td>
-                <td className="px-3 py-2 text-xs text-gray-500">{r.model_id.slice(0, 8)}…</td>
-                <td className="px-3 py-2 text-xs text-gray-500">{r.assumption_pack_id.slice(0, 8)}…</td>
-                <td className="px-3 py-2 text-xs text-gray-500">{r.output_template_id.slice(0, 8)}…</td>
-                <td className="px-3 py-2 text-xs text-gray-500">{r.triggered_by}</td>
+                <td className="px-3 py-2 text-xs">{r.project_name ?? projectName(r.project_id)}</td>
+                <td className="px-3 py-2 text-xs">{r.model_name ?? r.model_id.slice(0, 8) + '…'}</td>
+                <td className="px-3 py-2 text-xs">{r.assumption_pack_name ?? r.assumption_pack_id.slice(0, 8) + '…'}</td>
+                <td className="px-3 py-2 text-xs">{r.output_template_name ?? r.output_template_id.slice(0, 8) + '…'}</td>
+                <td className="px-3 py-2 text-xs text-gray-600">{r.triggered_by_email ?? r.triggered_by}</td>
                 <td className="px-3 py-2">
                   {r.output_download_url ? (
                     <a href={r.output_download_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">
@@ -118,16 +168,10 @@ export default function RunsPage() {
               </tr>
             ))}
             {!loading && runs.length === 0 && (
-              <tr>
-                <td colSpan={9} className="px-3 py-6 text-center text-sm text-gray-500">
-                  No runs yet. Open a project and click "+ New Run".
-                </td>
-              </tr>
+              <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-gray-500">No runs match the current filters.</td></tr>
             )}
             {loading && (
-              <tr>
-                <td colSpan={9} className="px-3 py-6 text-center text-sm text-gray-500">Loading…</td>
-              </tr>
+              <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-gray-500">Loading…</td></tr>
             )}
           </tbody>
         </table>

@@ -54,6 +54,7 @@ class RunSummary(BaseModel):
     duration_ms: int | None = None
     output_download_url: str | None = None
     triggered_by: str
+    triggered_by_email: str | None = None  # Sprint UX-01: for "Created By" filter on Runs page
 
 
 class RunResponse(BaseModel):
@@ -88,4 +89,5 @@ class RunResponse(BaseModel):
 
     # Audit
     triggered_by: str
+    triggered_by_email: str | None = None  # Sprint UX-01
     retry_of: str | None = None  # if this is a retry, the prior run id

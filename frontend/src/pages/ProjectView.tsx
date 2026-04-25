@@ -1,18 +1,20 @@
 import { useEffect, useRef, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useParams, Link, useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 import NewRunModal from '../components/NewRunModal'
 
-interface ExcelProject {
+interface ProjectResponse {
   id: string
   name: string
   code_name: string
   description: string
-  template_id: string
-  template_name: string
-  template_version_pinned: number
+  default_model_id: string | null
+  default_model_name: string | null
+  default_model_version: number | null
   status: string
+  archived: boolean
+  drive_folder_url: string | null
 }
 
 interface AssumptionPackSummary {
@@ -26,7 +28,7 @@ interface AssumptionPackSummary {
   created_at: string
 }
 
-interface ScenarioDetail extends AssumptionPackSummary {
+interface AssumptionPackDetail extends AssumptionPackSummary {
   description: string
   storage_kind: 'gcs' | 'drive_xlsx'
   storage_path: string | null
@@ -59,54 +61,53 @@ interface RunRecord {
   error: string | null
 }
 
-export default function ExcelProjectView() {
+export default function ProjectView() {
   const { projectId } = useParams<{ projectId: string }>()
   const { token } = useAuth()
-  const [project, setProject] = useState<ExcelProject | null>(null)
-  const [scenarios, setScenarios] = useState<AssumptionPackSummary[]>([])
+  const navigate = useNavigate()
+  const [project, setProject] = useState<ProjectResponse | null>(null)
+  const [packs, setPacks] = useState<AssumptionPackSummary[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [selected, setSelected] = useState<ScenarioDetail | null>(null)
+  const [selected, setSelected] = useState<AssumptionPackDetail | null>(null)
   const [runs, setRuns] = useState<RunRecord[]>([])
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [calculating, setCalculating] = useState(false)
   const [newName, setNewName] = useState('')
   const [cloneFromId, setCloneFromId] = useState('')
-  const [newStorageKind, setNewStorageKind] = useState<'' | 'gcs' | 'drive_xlsx'>('')
+  // Sprint UX-01: drop GCS option per CLAUDE.md doctrine — packs live in Drive only.
   const uploadFileRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
   const [showRunModal, setShowRunModal] = useState(false)
 
   const loadProject = () => {
     if (!projectId || !token) return  // wait until auth token is ready
-    api.get<ExcelProject>(`/projects/${projectId}`).then(setProject).catch(() => setProject(null))
+    api.get<ProjectResponse>(`/projects/${projectId}`).then(setProject).catch(() => setProject(null))
     api.get<AssumptionPackSummary[]>(`/projects/${projectId}/assumption-packs`).then((s) => {
-      setScenarios(s)
+      setPacks(s)
       if (s.length > 0 && !selectedId && s[0]) setSelectedId(s[0].id)
-    }).catch(() => setScenarios([]))
+    }).catch(() => setPacks([]))
   }
   useEffect(loadProject, [projectId, token])
 
   const loadSelected = () => {
     if (!projectId || !selectedId || !token) return
-    api.get<ScenarioDetail>(`/projects/${projectId}/assumption-packs/${selectedId}`).then(setSelected).catch(() => setSelected(null))
+    api.get<AssumptionPackDetail>(`/projects/${projectId}/assumption-packs/${selectedId}`).then(setSelected).catch(() => setSelected(null))
     api.get<RunRecord[]>(`/projects/${projectId}/assumption-packs/${selectedId}/runs`).then(setRuns).catch(() => setRuns([]))
   }
   useEffect(loadSelected, [projectId, selectedId, token])
 
-  const handleCreateScenario = async () => {
+  const handleCreatePack = async () => {
     if (!newName) {
       setMessage({ text: 'Name is required', type: 'error' })
       return
     }
     try {
-      const body: { name: string; clone_from_id?: string; storage_kind?: string } = { name: newName }
+      const body: { name: string; clone_from_id?: string } = { name: newName }
       if (cloneFromId) body.clone_from_id = cloneFromId
-      if (newStorageKind) body.storage_kind = newStorageKind
       await api.post(`/projects/${projectId}/assumption-packs`, body)
       setNewName('')
       setCloneFromId('')
-      setNewStorageKind('')
-      setMessage({ text: 'Scenario created', type: 'success' })
+      setMessage({ text: 'AssumptionPack created', type: 'success' })
       loadProject()
     } catch (err) {
       setMessage({ text: err instanceof Error ? err.message : 'Failed', type: 'error' })
@@ -179,7 +180,17 @@ export default function ExcelProjectView() {
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">{project.name}</h1>
           <p className="mt-1 text-sm text-gray-600">
-            Default Model: <span className="font-medium">{project.template_name}</span> (pinned to v{project.template_version_pinned})
+            Default Model:{' '}
+            {project.default_model_id ? (
+              <>
+                <span className="font-medium">{project.default_model_name ?? '—'}</span>
+                {project.default_model_version != null && (
+                  <span className="text-gray-500"> (pinned to v{project.default_model_version})</span>
+                )}
+              </>
+            ) : (
+              <span className="italic text-gray-500">none — pick one in New Run, or set via PUT /api/projects</span>
+            )}
           </p>
           {project.description && <p className="mt-1 text-xs text-gray-500">{project.description}</p>}
         </div>
@@ -190,6 +201,33 @@ export default function ExcelProjectView() {
           >
             + New Run
           </button>
+          {project.drive_folder_url && (
+            <a href={project.drive_folder_url} target="_blank" rel="noreferrer" className="rounded border border-gray-300 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50">
+              📁 Drive
+            </a>
+          )}
+          {project.archived ? (
+            <button
+              onClick={async () => {
+                await api.post(`/projects/${projectId}/unarchive`, {})
+                loadProject()
+              }}
+              className="rounded border border-blue-300 px-3 py-2 text-sm text-blue-700 hover:bg-blue-50"
+            >
+              Unarchive
+            </button>
+          ) : (
+            <button
+              onClick={async () => {
+                if (!confirm(`Archive "${project.name}"? It will be hidden from the Tree and the default Projects list.`)) return
+                await api.post(`/projects/${projectId}/archive`, {})
+                navigate('/projects')
+              }}
+              className="rounded border border-yellow-300 px-3 py-2 text-sm text-yellow-700 hover:bg-yellow-50"
+            >
+              Archive
+            </button>
+          )}
           <Link to="/projects" className="text-sm text-blue-600 hover:underline">← All Projects</Link>
         </div>
       </div>
@@ -205,11 +243,11 @@ export default function ExcelProjectView() {
       )}
 
       <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Scenario list */}
+        {/* AssumptionPack list */}
         <div className="rounded border bg-white">
-          <div className="border-b px-3 py-2 text-sm font-semibold text-gray-700">Scenarios</div>
+          <div className="border-b px-3 py-2 text-sm font-semibold text-gray-700">Assumption Packs</div>
           <ul>
-            {scenarios.map((s) => (
+            {packs.map((s) => (
               <li key={s.id}>
                 <button
                   onClick={() => setSelectedId(s.id)}
@@ -222,10 +260,10 @@ export default function ExcelProjectView() {
                 </button>
               </li>
             ))}
-            {scenarios.length === 0 && <li className="px-3 py-3 text-xs text-gray-500">No scenarios yet.</li>}
+            {packs.length === 0 && <li className="px-3 py-3 text-xs text-gray-500">No packs yet.</li>}
           </ul>
           <div className="border-t p-3">
-            <div className="mb-2 text-xs font-semibold text-gray-600">New Scenario</div>
+            <div className="mb-2 text-xs font-semibold text-gray-600">New AssumptionPack</div>
             <input
               className="mb-1 w-full rounded border px-2 py-1 text-xs"
               placeholder="Name"
@@ -233,23 +271,15 @@ export default function ExcelProjectView() {
               onChange={(e) => setNewName(e.target.value)}
             />
             <select className="mb-1 w-full rounded border px-2 py-1 text-xs" value={cloneFromId} onChange={(e) => setCloneFromId(e.target.value)}>
-              <option value="">Seed from Template</option>
-              {scenarios.map((s) => (
+              <option value="">Seed from default Model</option>
+              {packs.map((s) => (
                 <option key={s.id} value={s.id}>Clone from: {s.name}</option>
               ))}
             </select>
-            <select
-              className="mb-1 w-full rounded border px-2 py-1 text-xs"
-              value={newStorageKind}
-              onChange={(e) => setNewStorageKind(e.target.value as '' | 'gcs' | 'drive_xlsx')}
-            >
-              <option value="">Storage: use default</option>
-              <option value="gcs">Cloud Storage (GCS)</option>
-              <option value="drive_xlsx">Google Drive (.xlsx)</option>
-            </select>
-            <button onClick={handleCreateScenario} className="w-full rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700">
+            <button onClick={handleCreatePack} className="w-full rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700">
               Create
             </button>
+            <p className="mt-2 text-[10px] text-gray-500">Stored in Drive (.xlsx). Edit in Sheets after creation.</p>
           </div>
         </div>
 
@@ -383,7 +413,7 @@ export default function ExcelProjectView() {
               )}
             </div>
           ) : (
-            <div className="p-6 text-sm text-gray-500">Pick a scenario on the left or create one.</div>
+            <div className="p-6 text-sm text-gray-500">Pick an AssumptionPack on the left or create one.</div>
           )}
         </div>
       </div>

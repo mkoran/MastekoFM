@@ -164,6 +164,7 @@ def _to_response(doc_id: str, data: dict[str, Any]) -> RunResponse:
         warnings=data.get("warnings", []),
         error=data.get("error"),
         triggered_by=data.get("triggered_by", ""),
+        triggered_by_email=data.get("triggered_by_email"),
         retry_of=data.get("retry_of"),
     )
 
@@ -172,15 +173,20 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> RunSummary:
     return RunSummary(
         id=doc_id,
         project_id=data.get("project_id", ""),
+        project_name=data.get("project_name"),
         model_id=data.get("model_id", ""),
+        model_name=data.get("model_name"),
         assumption_pack_id=data.get("assumption_pack_id", ""),
+        assumption_pack_name=data.get("assumption_pack_name"),
         output_template_id=data.get("output_template_id", ""),
+        output_template_name=data.get("output_template_name"),
         status=data.get("status", "pending"),
         started_at=data.get("started_at", datetime.now(UTC)),
         completed_at=data.get("completed_at"),
         duration_ms=data.get("duration_ms"),
         output_download_url=data.get("output_download_url"),
         triggered_by=data.get("triggered_by", ""),
+        triggered_by_email=data.get("triggered_by_email"),
     )
 
 
@@ -199,21 +205,27 @@ async def create_run(body: RunCreate, request: Request, current_user: CurrentUse
     started_at = datetime.now(UTC)
     t0 = time.monotonic()
 
+    proj_doc_for_name = _project_doc(body.project_id) or {}
     run_ref = _runs_ref().document()
     run_data: dict[str, Any] = {
         "project_id": body.project_id,
+        "project_name": proj_doc_for_name.get("name"),
         "assumption_pack_id": body.assumption_pack_id,
+        "assumption_pack_name": pack.get("name"),
         "assumption_pack_version": pack.get("version", 1),
         "assumption_pack_drive_revision_id": None,
         "model_id": body.model_id,
+        "model_name": model.get("name"),
         "model_version": model.get("version", 1),
         "model_drive_revision_id": None,
         "output_template_id": body.output_template_id,
+        "output_template_name": tpl.get("name"),
         "output_template_version": tpl.get("version", 1),
         "output_template_drive_revision_id": None,
         "status": "running",
         "started_at": started_at,
         "triggered_by": current_user["uid"],
+        "triggered_by_email": current_user.get("email", ""),
         "warnings": [],
     }
     run_ref.set(run_data)
@@ -304,12 +316,24 @@ async def create_run(body: RunCreate, request: Request, current_user: CurrentUse
 async def list_runs(
     current_user: CurrentUser,
     project_id: str | None = Query(default=None),
+    triggered_by: str | None = Query(default=None, description="Filter by user uid"),
+    triggered_by_email: str | None = Query(
+        default=None, description="Filter by user email (denormalized on the run)"
+    ),
     status: str | None = Query(default=None),
     limit: int = Query(default=50),
 ):
+    """Sprint UX-01-14: filter Run history by project, user (uid or email), and status.
+
+    Sorted descending by started_at. Defaults to limit=50; bump explicitly if needed.
+    """
     q = _runs_ref()
     if project_id:
         q = q.where("project_id", "==", project_id)
+    if triggered_by:
+        q = q.where("triggered_by", "==", triggered_by)
+    if triggered_by_email:
+        q = q.where("triggered_by_email", "==", triggered_by_email)
     if status:
         q = q.where("status", "==", status)
     q = q.order_by("started_at", direction="DESCENDING").limit(limit)

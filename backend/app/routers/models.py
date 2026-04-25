@@ -1,8 +1,13 @@
-"""Excel Templates router — upload + CRUD for .xlsx with I_/O_ tab prefixes."""
+"""Excel Templates router — upload + CRUD for .xlsx with I_/O_ tab prefixes.
+
+Sprint UX-01: adds archive/unarchive endpoints, drive_url derivation for the
+Models page UX, and PUT support for swapping the underlying drive_file_id
+(UX-01-16).
+"""
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
@@ -11,7 +16,7 @@ from backend.app.models.model import (
     ModelSummary,
     ModelUpdate,
 )
-from backend.app.services import excel_template_engine, storage_service
+from backend.app.services import drive_service, excel_template_engine, storage_service
 
 router = APIRouter(tags=["models"])
 
@@ -21,6 +26,21 @@ CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
 def _ref():
     prefix = settings.firestore_collection_prefix
     return get_firestore_client().collection(f"{prefix}models")
+
+
+def _drive_url(data: dict[str, Any]) -> str | None:
+    """Sprint UX-01: open-in-Sheets URL for Drive-backed Models, or GCS public URL."""
+    fid = data.get("drive_file_id")
+    if fid:
+        return f"https://docs.google.com/spreadsheets/d/{fid}/edit"
+    sp = data.get("storage_path")
+    if sp:
+        return storage_service.public_url(sp)
+    return None
+
+
+def _is_archived(data: dict[str, Any]) -> bool:
+    return bool(data.get("archived")) or data.get("status") == "archived"
 
 
 def _to_response(doc_id: str, data: dict[str, Any]) -> ModelResponse:
@@ -35,8 +55,11 @@ def _to_response(doc_id: str, data: dict[str, Any]) -> ModelResponse:
         calc_tabs=data.get("calc_tabs", []),
         storage_path=data.get("storage_path", ""),
         drive_file_id=data.get("drive_file_id"),
+        drive_url=_drive_url(data),
         size_bytes=data.get("size_bytes", 0),
+        archived=_is_archived(data),
         uploaded_by=data.get("uploaded_by", ""),
+        uploaded_by_email=data.get("uploaded_by_email") or data.get("created_by_email"),
         created_at=data.get("created_at", datetime.now(UTC)),
         updated_at=data.get("updated_at", datetime.now(UTC)),
     )
@@ -51,6 +74,9 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> ModelSummary:
         input_tab_count=len(data.get("input_tabs", [])),
         output_tab_count=len(data.get("output_tabs", [])),
         calc_tab_count=len(data.get("calc_tabs", [])),
+        archived=_is_archived(data),
+        drive_url=_drive_url(data),
+        created_by_email=data.get("uploaded_by_email") or data.get("created_by_email"),
         created_at=data.get("created_at", datetime.now(UTC)),
         updated_at=data.get("updated_at", datetime.now(UTC)),
     )
@@ -99,7 +125,10 @@ async def upload_excel_template(
         "storage_path": storage_path,
         "drive_file_id": None,
         "size_bytes": len(content),
+        "archived": False,
         "uploaded_by": current_user["uid"],
+        "uploaded_by_email": current_user.get("email", ""),
+        "created_by_email": current_user.get("email", ""),
         "created_at": now,
         "updated_at": now,
     }
@@ -108,9 +137,18 @@ async def upload_excel_template(
 
 
 @router.get("/api/models", response_model=list[ModelSummary])
-async def list_excel_templates(current_user: CurrentUser):
-    """List all Excel Templates (summary view)."""
-    return [_to_summary(doc.id, doc.to_dict()) for doc in _ref().stream()]
+async def list_excel_templates(
+    current_user: CurrentUser,
+    include_archived: bool = Query(default=False),
+):
+    """List all Excel Templates (summary view). Hides archived by default (UX-01)."""
+    out: list[ModelSummary] = []
+    for doc in _ref().stream():
+        data = doc.to_dict()
+        if not include_archived and _is_archived(data):
+            continue
+        out.append(_to_summary(doc.id, data))
+    return out
 
 
 @router.get("/api/models/{template_id}", response_model=ModelResponse)
@@ -183,7 +221,12 @@ async def replace_excel_template(
 async def update_excel_template(
     template_id: str, body: ModelUpdate, current_user: CurrentUser
 ):
-    """Update Template metadata (name / description / code_name)."""
+    """Update Template metadata (name / description / code_name / drive_file_id / archived).
+
+    Sprint UX-01-16: setting `drive_file_id` swaps the underlying Drive file
+    (e.g. you uploaded a new version somewhere else). The file is fetched and
+    its tab classification is recomputed so I_/O_/calc tab counts stay accurate.
+    """
     doc_ref = _ref().document(template_id)
     doc = doc_ref.get()
     if not doc.exists:
@@ -195,6 +238,59 @@ async def update_excel_template(
         updates["description"] = body.description
     if body.code_name is not None:
         updates["code_name"] = storage_service.safe_name(body.code_name)
+    if body.drive_file_id is not None:
+        new_fid = body.drive_file_id.strip()
+        if not new_fid:
+            raise HTTPException(status_code=400, detail="drive_file_id cannot be empty")
+        # Fetch file content + reclassify tabs to keep input/output/calc lists accurate.
+        try:
+            content = drive_service.download_file(new_fid)
+            if not content:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "Could not download Drive file. Check the id and that the "
+                        "service account / signed-in user can read it."
+                    ),
+                )
+            classes = excel_template_engine.classify_bytes(content)
+        except HTTPException:
+            raise
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Drive swap failed: {exc}") from exc
+        updates["drive_file_id"] = new_fid
+        updates["storage_path"] = None
+        updates["input_tabs"] = classes["input_tabs"]
+        updates["output_tabs"] = classes["output_tabs"]
+        updates["calc_tabs"] = classes["calc_tabs"]
+        updates["size_bytes"] = len(content)
+    if body.archived is not None:
+        updates["archived"] = body.archived
+        updates["status"] = "archived" if body.archived else "active"
+    doc_ref.update(updates)
+    return _to_response(template_id, {**doc.to_dict(), **updates})
+
+
+@router.post("/api/models/{template_id}/archive", response_model=ModelResponse)
+async def archive_model(template_id: str, current_user: CurrentUser):
+    """Sprint UX-01: archive a Model (non-destructive)."""
+    doc_ref = _ref().document(template_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Excel Template not found")
+    updates = {"archived": True, "status": "archived", "updated_at": datetime.now(UTC)}
+    doc_ref.update(updates)
+    return _to_response(template_id, {**doc.to_dict(), **updates})
+
+
+@router.post("/api/models/{template_id}/unarchive", response_model=ModelResponse)
+async def unarchive_model(template_id: str, current_user: CurrentUser):
+    """Sprint UX-01: re-activate an archived Model."""
+    doc_ref = _ref().document(template_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Excel Template not found")
+    updates = {"archived": False, "status": "active", "updated_at": datetime.now(UTC)}
     doc_ref.update(updates)
     return _to_response(template_id, {**doc.to_dict(), **updates})
 

@@ -1,8 +1,8 @@
 # MastekoFM — Product Backlog
 
-> Last updated: 2026-04-16
-> Status: pre-Sprint-A (Hello World vertical slice)
-> Total roadmap: 8 sprints (A–H), then a longer Phase 3 backlog
+> Last updated: 2026-04-25
+> Status: post-Sprint-UX-01 (bug bash + UX polish + smoke coverage shipped)
+> Total roadmap: 8 sprints (A–H) + UX-01, then a longer Phase 3 backlog
 
 ---
 
@@ -14,6 +14,7 @@
 | **B** | Cleanup + Campus Adele migration — delete ~50% of legacy code, re-seed Campus Adele under new schema | M (~3-4 days) | A approved — **✅ shipped v2.001** |
 | **A.5** | Tree Navigator — hierarchical browser (Project → Pack → Inputs/Outputs/Runs → cells) | M (~3-4 days) | B — **✅ shipped v2.003** |
 | **INFRA-001** | CI/CD via GitHub Actions + Workload Identity Federation — auto-deploy on push, no re-auth | S (~1 day) | B — **✅ scaffolding shipped, awaits Marc setup** |
+| **UX-01** | Bug bash (Create Pack 500, Calculate no-op) + UX polish (Projects/Models/Runs columns + filters + archive) + CI smoke gates for all gaps | L (~5-7 days) | A.5 — **✅ shipped v2.004** |
 | **C** | Async runs via Cloud Tasks — POST returns immediately, worker processes, status polling | M (~4-5 days) | B |
 | **D** | PDF OutputTemplates — WeasyPrint + first investor summary template for Campus Adele | S (~2-3 days) | B (can run parallel with C) |
 | **E** | Multi-user permissions — Project members, owner/editor/viewer roles, Drive sharing automation | M (~4-5 days) | B |

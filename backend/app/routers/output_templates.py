@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import openpyxl
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Request, UploadFile
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
@@ -58,6 +58,10 @@ def _ensure_template_folder(user_token: str | None) -> str:
     return drive_service.find_or_create_folder("OutputTemplates", mfm, user_token)
 
 
+def _is_archived(data: dict[str, Any]) -> bool:
+    return bool(data.get("archived")) or data.get("status") == "archived"
+
+
 def _to_response(doc_id: str, data: dict[str, Any]) -> OutputTemplateResponse:
     drive_id = data.get("drive_file_id")
     edit_url = (
@@ -78,13 +82,17 @@ def _to_response(doc_id: str, data: dict[str, Any]) -> OutputTemplateResponse:
         output_tabs=data.get("output_tabs", []),
         calc_tabs=data.get("calc_tabs", []),
         size_bytes=data.get("size_bytes", 0),
+        archived=_is_archived(data),
         uploaded_by=data.get("uploaded_by", ""),
+        uploaded_by_email=data.get("uploaded_by_email") or data.get("created_by_email"),
         created_at=data.get("created_at", datetime.now(UTC)),
         updated_at=data.get("updated_at", datetime.now(UTC)),
     )
 
 
 def _to_summary(doc_id: str, data: dict[str, Any]) -> OutputTemplateSummary:
+    drive_id = data.get("drive_file_id")
+    drive_url = f"https://docs.google.com/spreadsheets/d/{drive_id}/edit" if drive_id else None
     return OutputTemplateSummary(
         id=doc_id,
         name=data.get("name", ""),
@@ -94,6 +102,9 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> OutputTemplateSummary:
         m_tab_count=len(data.get("m_tabs", [])),
         output_tab_count=len(data.get("output_tabs", [])),
         calc_tab_count=len(data.get("calc_tabs", [])),
+        archived=_is_archived(data),
+        drive_url=drive_url,
+        created_by_email=data.get("uploaded_by_email") or data.get("created_by_email"),
         created_at=data.get("created_at", datetime.now(UTC)),
         updated_at=data.get("updated_at", datetime.now(UTC)),
     )
@@ -167,7 +178,10 @@ async def upload_output_template(
         "output_tabs": classes["output_tabs"],
         "calc_tabs": classes["calc_tabs"],
         "size_bytes": len(content),
+        "archived": False,
         "uploaded_by": current_user["uid"],
+        "uploaded_by_email": current_user.get("email", ""),
+        "created_by_email": current_user.get("email", ""),
         "created_at": now,
         "updated_at": now,
     }
@@ -176,8 +190,18 @@ async def upload_output_template(
 
 
 @router.get("/api/output-templates", response_model=list[OutputTemplateSummary])
-async def list_output_templates(current_user: CurrentUser):
-    return [_to_summary(doc.id, doc.to_dict()) for doc in _ref().stream()]
+async def list_output_templates(
+    current_user: CurrentUser,
+    include_archived: bool = Query(default=False),
+):
+    """Sprint UX-01: hides archived OutputTemplates by default."""
+    out: list[OutputTemplateSummary] = []
+    for doc in _ref().stream():
+        data = doc.to_dict()
+        if not include_archived and _is_archived(data):
+            continue
+        out.append(_to_summary(doc.id, data))
+    return out
 
 
 @router.get("/api/output-templates/{template_id}", response_model=OutputTemplateResponse)
@@ -203,6 +227,33 @@ async def update_output_template(
         updates["description"] = body.description
     if body.code_name is not None:
         updates["code_name"] = storage_service.safe_name(body.code_name)
+    if body.archived is not None:
+        updates["archived"] = body.archived
+        updates["status"] = "archived" if body.archived else "active"
+    doc_ref.update(updates)
+    return _to_response(template_id, {**doc.to_dict(), **updates})
+
+
+@router.post("/api/output-templates/{template_id}/archive", response_model=OutputTemplateResponse)
+async def archive_output_template(template_id: str, current_user: CurrentUser):
+    """Sprint UX-01: archive an OutputTemplate (non-destructive)."""
+    doc_ref = _ref().document(template_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="OutputTemplate not found")
+    updates = {"archived": True, "status": "archived", "updated_at": datetime.now(UTC)}
+    doc_ref.update(updates)
+    return _to_response(template_id, {**doc.to_dict(), **updates})
+
+
+@router.post("/api/output-templates/{template_id}/unarchive", response_model=OutputTemplateResponse)
+async def unarchive_output_template(template_id: str, current_user: CurrentUser):
+    """Sprint UX-01: re-activate an archived OutputTemplate."""
+    doc_ref = _ref().document(template_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="OutputTemplate not found")
+    updates = {"archived": False, "status": "active", "updated_at": datetime.now(UTC)}
     doc_ref.update(updates)
     return _to_response(template_id, {**doc.to_dict(), **updates})
 

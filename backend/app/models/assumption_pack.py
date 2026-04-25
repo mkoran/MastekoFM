@@ -33,7 +33,7 @@ class AssumptionPackUpdate(BaseModel):
 
 
 class AssumptionPackResponse(BaseModel):
-    """Full Scenario record."""
+    """Full AssumptionPack record."""
 
     id: str
     name: str
@@ -41,7 +41,8 @@ class AssumptionPackResponse(BaseModel):
     description: str
     project_id: str
     status: str                       # active | archived
-    storage_kind: str = "gcs"         # gcs | drive_xlsx
+    archived: bool = False            # Sprint UX-01: explicit boolean
+    storage_kind: str = "drive_xlsx"  # Sprint UX-01: default Drive (post-Sprint-B)
     storage_path: str | None = None   # GCS path when storage_kind=gcs
     drive_file_id: str | None = None  # Drive file id when storage_kind=drive_xlsx
     edit_url: str | None = None       # URL to open in Sheets / download, chosen per store
@@ -49,6 +50,7 @@ class AssumptionPackResponse(BaseModel):
     version: int                      # increments on every inputs-file replacement
     last_run: dict[str, Any] | None = None  # {run_id, at, status, output_path, ...}
     created_by: str
+    created_by_email: str | None = None  # Sprint UX-01
     created_at: datetime
     updated_at: datetime
 
@@ -60,9 +62,11 @@ class AssumptionPackSummary(BaseModel):
     name: str
     code_name: str
     status: str
+    archived: bool = False  # Sprint UX-01
     version: int
     last_run_at: datetime | None = None
     last_run_status: str | None = None
+    created_by_email: str | None = None  # Sprint UX-01
     created_at: datetime
 
 

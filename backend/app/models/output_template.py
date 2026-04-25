@@ -21,6 +21,9 @@ class OutputTemplateSummary(BaseModel):
     m_tab_count: int
     output_tab_count: int
     calc_tab_count: int
+    archived: bool = False  # Sprint UX-01
+    drive_url: str | None = None  # Sprint UX-01
+    created_by_email: str | None = None  # Sprint UX-01
     created_at: datetime
     updated_at: datetime
 
@@ -42,7 +45,9 @@ class OutputTemplateResponse(BaseModel):
     output_tabs: list[str]
     calc_tabs: list[str]
     size_bytes: int
+    archived: bool = False  # Sprint UX-01
     uploaded_by: str
+    uploaded_by_email: str | None = None  # Sprint UX-01
     created_at: datetime
     updated_at: datetime
 
@@ -53,3 +58,4 @@ class OutputTemplateUpdate(BaseModel):
     name: str | None = None
     code_name: str | None = None
     description: str | None = None
+    archived: bool | None = None  # Sprint UX-01

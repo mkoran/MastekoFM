@@ -22,6 +22,9 @@ class ModelSummary(BaseModel):
     input_tab_count: int
     output_tab_count: int
     calc_tab_count: int
+    archived: bool = False  # Sprint UX-01
+    drive_url: str | None = None  # Sprint UX-01: opens in Sheets/Drive
+    created_by_email: str | None = None  # Sprint UX-01
     created_at: datetime
     updated_at: datetime
 
@@ -39,8 +42,11 @@ class ModelResponse(BaseModel):
     calc_tabs: list[str]
     storage_path: str                 # gs:// path (or drive:<file_id>)
     drive_file_id: str | None = None
+    drive_url: str | None = None  # Sprint UX-01: derived edit URL
     size_bytes: int
+    archived: bool = False  # Sprint UX-01
     uploaded_by: str
+    uploaded_by_email: str | None = None  # Sprint UX-01
     created_at: datetime
     updated_at: datetime
 
@@ -51,3 +57,5 @@ class ModelUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     code_name: str | None = None
+    drive_file_id: str | None = None  # Sprint UX-01-16: swap to a different Drive file
+    archived: bool | None = None  # Sprint UX-01

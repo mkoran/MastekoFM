@@ -1,9 +1,11 @@
-"""Scenarios router — per-Excel-Project inputs-only .xlsx files + Calculate.
+"""AssumptionPacks router — per-Project inputs-only .xlsx files + Calculate.
 
-Supports two backends via `storage_kind`:
-  - "gcs"         — file lives in the masteko-fm-outputs bucket
-  - "drive_xlsx"  — file lives as .xlsx in a user's Drive folder; "Edit in Sheets"
-                    opens it in Sheets (Office mode) with no conversion.
+Sprint UX-01: bug-fixed for post-Sprint-B field names (default_model_id, not
+template_id) and for Drive-backed Models (uses pack_store.load_model_bytes_compat).
+
+Storage backend defaults to Drive (per CLAUDE.md: "AssumptionPacks live in Drive
+(.xlsx). NO GCS storage for packs (post-Sprint-B)"). GCS remains as an adapter
+for legacy data and tests, but new packs default to drive_xlsx.
 
 All bytes are normalized to .xlsx at Calculate time, so the engine is identical
 regardless of backend. See services/pack_store.py for the adapter.
@@ -12,7 +14,7 @@ import time
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
@@ -60,11 +62,20 @@ def _settings_doc() -> dict[str, Any]:
 
 
 def _default_storage_kind() -> str:
-    return _settings_doc().get("default_scenario_storage_kind") or pack_store.STORAGE_KIND_GCS
+    """Sprint UX-01: default to Drive (per CLAUDE.md doctrine), not GCS.
+
+    Settings doc may override via `default_scenario_storage_kind` for back-compat
+    with existing tests/fixtures.
+    """
+    return _settings_doc().get("default_scenario_storage_kind") or pack_store.STORAGE_KIND_DRIVE_XLSX
 
 
 def _drive_root_folder_id() -> str:
     return _settings_doc().get("drive_root_folder_id", "") or settings.drive_root_folder_id
+
+
+def _is_archived(data: dict[str, Any]) -> bool:
+    return bool(data.get("archived")) or data.get("status") == "archived"
 
 
 def _to_scenario(doc_id: str, data: dict[str, Any]) -> AssumptionPackResponse:
@@ -76,6 +87,7 @@ def _to_scenario(doc_id: str, data: dict[str, Any]) -> AssumptionPackResponse:
         description=data.get("description", ""),
         project_id=data.get("project_id", ""),
         status=data.get("status", "active"),
+        archived=_is_archived(data),
         storage_kind=data.get("storage_kind") or store.kind,
         storage_path=data.get("storage_path"),
         drive_file_id=data.get("drive_file_id"),
@@ -84,6 +96,7 @@ def _to_scenario(doc_id: str, data: dict[str, Any]) -> AssumptionPackResponse:
         version=data.get("version", 1),
         last_run=data.get("last_run"),
         created_by=data.get("created_by", ""),
+        created_by_email=data.get("created_by_email"),
         created_at=data.get("created_at", datetime.now(UTC)),
         updated_at=data.get("updated_at", datetime.now(UTC)),
     )
@@ -96,22 +109,45 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> AssumptionPackSummary:
         name=data.get("name", ""),
         code_name=data.get("code_name", ""),
         status=data.get("status", "active"),
+        archived=_is_archived(data),
         version=data.get("version", 1),
         last_run_at=last.get("completed_at") or last.get("started_at"),
         last_run_status=last.get("status"),
+        created_by_email=data.get("created_by_email"),
         created_at=data.get("created_at", datetime.now(UTC)),
     )
 
 
-def _load_project_and_template(project_id: str) -> tuple[dict[str, Any], dict[str, Any]]:
+def _load_project_and_default_model(
+    project_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load Project + its default Model.
+
+    Sprint UX-01 fix: post-Sprint-B Projects use `default_model_id`, not the
+    legacy `template_id`. Reads `default_model_id` (with `template_id` as a
+    one-time legacy fallback for any un-migrated rows). Returns 400 (not 500)
+    when a Project has no default Model bound.
+    """
     proj_doc = _proj_ref(project_id).get()
     if not proj_doc.exists:
-        raise HTTPException(status_code=404, detail="Excel Project not found")
+        raise HTTPException(status_code=404, detail="Project not found")
     proj = proj_doc.to_dict()
-    tpl_doc = _tpl_ref(proj.get("template_id", "")).get()
-    if not tpl_doc.exists:
-        raise HTTPException(status_code=404, detail="Template for this project is missing")
-    return proj, tpl_doc.to_dict()
+    model_id = proj.get("default_model_id") or proj.get("template_id")
+    if not model_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Project has no default Model bound. Either set one via "
+                "PUT /api/projects/{id} with default_model_id, or use "
+                "POST /api/runs which lets you pick the Model + OutputTemplate."
+            ),
+        )
+    model_doc = _tpl_ref(model_id).get()
+    if not model_doc.exists:
+        raise HTTPException(
+            status_code=404, detail=f"Default Model {model_id} not found"
+        )
+    return proj, model_doc.to_dict()
 
 
 def _resolve_drive_folders(
@@ -153,7 +189,7 @@ async def create_scenario(
     default (`/api/settings` → `default_scenario_storage_kind`). Drive storage
     requires a Google OAuth token in the X-MFM-Drive-Token header.
     """
-    proj, tpl = _load_project_and_template(project_id)
+    proj, model = _load_project_and_default_model(project_id)
     user_token = request.headers.get("X-MFM-Drive-Token")
 
     # Decide storage kind
@@ -161,17 +197,18 @@ async def create_scenario(
     if kind not in (pack_store.STORAGE_KIND_GCS, pack_store.STORAGE_KIND_DRIVE_XLSX):
         raise HTTPException(status_code=400, detail=f"Unknown storage_kind: {kind}")
 
-    # Produce seed bytes — from clone or from Template extract
+    # Produce seed bytes — from clone or from Model extract
     if body.clone_from_id:
         src_doc = _scn_ref(project_id).document(body.clone_from_id).get()
         if not src_doc.exists:
-            raise HTTPException(status_code=404, detail="Source scenario not found")
+            raise HTTPException(status_code=404, detail="Source AssumptionPack not found")
         src = src_doc.to_dict()
         src_store = pack_store.store_for_scenario(src)
         seed_bytes = src_store.read_bytes(src, user_access_token=user_token)
     else:
-        tpl_bytes = storage_service.download_xlsx(tpl.get("storage_path", ""))
-        seed_bytes = excel_template_engine.extract_scenario_from_template(tpl_bytes)
+        # Sprint UX-01 fix: use compat loader so Drive-backed Models also work
+        model_bytes = pack_store.load_model_bytes_compat(model)
+        seed_bytes = excel_template_engine.extract_scenario_from_template(model_bytes)
 
     doc_ref = _scn_ref(project_id).document()
     project_code = storage_service.safe_name(proj.get("code_name") or proj.get("name", ""), fallback="project")
@@ -202,9 +239,11 @@ async def create_scenario(
         "description": body.description,
         "project_id": project_id,
         "status": "active",
+        "archived": False,
         "version": 1,
         "last_run": None,
         "created_by": current_user["uid"],
+        "created_by_email": current_user.get("email", ""),
         "created_at": now,
         "updated_at": now,
         **storage_fields,
@@ -217,9 +256,19 @@ async def create_scenario(
     "/api/projects/{project_id}/assumption-packs",
     response_model=list[AssumptionPackSummary],
 )
-async def list_scenarios(project_id: str, current_user: CurrentUser):
-    """List scenarios for an Excel Project."""
-    return [_to_summary(doc.id, doc.to_dict()) for doc in _scn_ref(project_id).stream()]
+async def list_scenarios(
+    project_id: str,
+    current_user: CurrentUser,
+    include_archived: bool = Query(default=False),
+):
+    """List AssumptionPacks for a Project. Hides archived by default (UX-01)."""
+    out: list[AssumptionPackSummary] = []
+    for doc in _scn_ref(project_id).stream():
+        data = doc.to_dict()
+        if not include_archived and _is_archived(data):
+            continue
+        out.append(_to_summary(doc.id, data))
+    return out
 
 
 @router.get(
@@ -361,12 +410,27 @@ async def upload_scenario_file(
     response_model=AssumptionPackResponse,
 )
 async def archive_scenario(project_id: str, scenario_id: str, current_user: CurrentUser):
-    """Archive a scenario (non-destructive)."""
+    """Archive an AssumptionPack (non-destructive)."""
     doc_ref = _scn_ref(project_id).document(scenario_id)
     doc = doc_ref.get()
     if not doc.exists:
-        raise HTTPException(status_code=404, detail="Scenario not found")
-    updates = {"status": "archived", "updated_at": datetime.now(UTC)}
+        raise HTTPException(status_code=404, detail="AssumptionPack not found")
+    updates = {"status": "archived", "archived": True, "updated_at": datetime.now(UTC)}
+    doc_ref.update(updates)
+    return _to_scenario(scenario_id, {**doc.to_dict(), **updates})
+
+
+@router.post(
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}/unarchive",
+    response_model=AssumptionPackResponse,
+)
+async def unarchive_scenario(project_id: str, scenario_id: str, current_user: CurrentUser):
+    """Sprint UX-01: re-activate an archived AssumptionPack."""
+    doc_ref = _scn_ref(project_id).document(scenario_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="AssumptionPack not found")
+    updates = {"status": "active", "archived": False, "updated_at": datetime.now(UTC)}
     doc_ref.update(updates)
     return _to_scenario(scenario_id, {**doc.to_dict(), **updates})
 
@@ -389,11 +453,11 @@ async def calculate_scenario(
     Output is uploaded to GCS for a stable public download link. (Optional future:
     also upload to Drive when the scenario is Drive-backed.)
     """
-    proj, tpl = _load_project_and_template(project_id)
+    proj, model = _load_project_and_default_model(project_id)
     scn_ref = _scn_ref(project_id).document(scenario_id)
     scn_doc = scn_ref.get()
     if not scn_doc.exists:
-        raise HTTPException(status_code=404, detail="Scenario not found")
+        raise HTTPException(status_code=404, detail="AssumptionPack not found")
     scn = scn_doc.to_dict()
     user_token = request.headers.get("X-MFM-Drive-Token")
 
@@ -407,7 +471,7 @@ async def calculate_scenario(
         "project_id": project_id,
         "status": "running",
         "started_at": started_at,
-        "template_version_used": tpl.get("version", 1),
+        "template_version_used": model.get("version", 1),
         "scenario_version_used": scn.get("version", 1),
         "input_storage_kind": store.kind,
         "input_storage_path": scn.get("storage_path"),
@@ -418,9 +482,10 @@ async def calculate_scenario(
     run_ref.set(run_data)
 
     try:
-        template_bytes = storage_service.download_xlsx(tpl.get("storage_path", ""))
+        # Sprint UX-01 fix: use compat loader so Drive-backed Models also work
+        model_bytes = pack_store.load_model_bytes_compat(model)
         scenario_bytes = store.read_bytes(scn, user_access_token=user_token)
-        result = excel_template_engine.calculate(template_bytes, scenario_bytes)
+        result = excel_template_engine.calculate(model_bytes, scenario_bytes)
         output_bytes: bytes = result["output_bytes"]
 
         project_code = storage_service.safe_name(proj.get("code_name") or proj.get("name", ""), fallback=project_id)
@@ -479,7 +544,7 @@ async def calculate_scenario(
             started_at=started_at,
             completed_at=completed_at,
             duration_ms=duration_ms,
-            template_version_used=tpl.get("version", 1),
+            template_version_used=model.get("version", 1),
             scenario_version_used=scn.get("version", 1),
             input_storage_kind=store.kind,
             input_storage_path=scn.get("storage_path"),

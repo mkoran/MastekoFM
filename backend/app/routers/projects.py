@@ -7,7 +7,7 @@ independently. `default_model_id` is just a UX convenience for the New Run modal
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
@@ -34,8 +34,26 @@ def _model_ref():
     return get_firestore_client().collection(f"{prefix}models")
 
 
+def _runs_ref():
+    prefix = settings.firestore_collection_prefix
+    return get_firestore_client().collection(f"{prefix}runs")
+
+
 def _pack_subref(project_id: str):
     return _ref().document(project_id).collection("assumption_packs")
+
+
+def _drive_folder_url(folders: dict[str, Any] | None) -> str | None:
+    """Build a Drive web URL from cached folder ids."""
+    if not folders:
+        return None
+    fid = folders.get("project") or folders.get("root") or folders.get("inputs")
+    return f"https://drive.google.com/drive/folders/{fid}" if fid else None
+
+
+def _is_archived(data: dict[str, Any]) -> bool:
+    """Sprint UX-01: archived if explicit boolean OR legacy status string."""
+    return bool(data.get("archived")) or data.get("status") == "archived"
 
 
 def _to_response(doc_id: str, data: dict[str, Any]) -> ProjectResponse:
@@ -48,7 +66,10 @@ def _to_response(doc_id: str, data: dict[str, Any]) -> ProjectResponse:
         default_model_name=data.get("default_model_name"),
         default_model_version=data.get("default_model_version"),
         status=data.get("status", "active"),
+        archived=_is_archived(data),
+        drive_folder_url=_drive_folder_url(data.get("drive_folders")),
         created_by=data.get("created_by", ""),
+        created_by_email=data.get("created_by_email"),
         created_at=data.get("created_at", datetime.now(UTC)),
         updated_at=data.get("updated_at", datetime.now(UTC)),
     )
@@ -78,7 +99,9 @@ async def create_project(body: ProjectCreate, current_user: CurrentUser):
         "default_model_name": default_model_name,
         "default_model_version": default_model_version,
         "status": "active",
+        "archived": False,
         "created_by": current_user["uid"],
+        "created_by_email": current_user.get("email", ""),
         "created_at": now,
         "updated_at": now,
     }
@@ -87,11 +110,34 @@ async def create_project(body: ProjectCreate, current_user: CurrentUser):
 
 
 @router.get("/api/projects", response_model=list[ProjectSummary])
-async def list_projects(current_user: CurrentUser):
+async def list_projects(
+    current_user: CurrentUser,
+    include_archived: bool = Query(default=False),
+):
+    """Sprint UX-01: hides archived projects by default; pass ?include_archived=true to see them.
+
+    Each summary now includes run_count, last_run_at, last_run_status, created_by_email,
+    drive_folder_url. Last-run is computed via a single per-project query (acceptable
+    until Project counts grow into the hundreds — denormalize then).
+    """
     out: list[ProjectSummary] = []
+    runs_collection = _runs_ref()
     for doc in _ref().stream():
         data = doc.to_dict()
+        if not include_archived and _is_archived(data):
+            continue
         pack_count = sum(1 for _ in _pack_subref(doc.id).stream())
+        # Last-run lookup per project (small N today; denormalize when N grows)
+        last_run_at = None
+        last_run_status = None
+        run_count = 0
+        for r in runs_collection.where("project_id", "==", doc.id).stream():
+            run_count += 1
+            rd = r.to_dict()
+            sa = rd.get("started_at")
+            if sa is not None and (last_run_at is None or sa > last_run_at):
+                last_run_at = sa
+                last_run_status = rd.get("status")
         out.append(ProjectSummary(
             id=doc.id,
             name=data.get("name", ""),
@@ -99,7 +145,14 @@ async def list_projects(current_user: CurrentUser):
             default_model_id=data.get("default_model_id"),
             default_model_name=data.get("default_model_name"),
             status=data.get("status", "active"),
+            archived=_is_archived(data),
+            drive_folder_url=_drive_folder_url(data.get("drive_folders")),
             pack_count=pack_count,
+            run_count=run_count,
+            last_run_at=last_run_at,
+            last_run_status=last_run_status,
+            created_by=data.get("created_by", ""),
+            created_by_email=data.get("created_by_email"),
             created_at=data.get("created_at", datetime.now(UTC)),
         ))
     return out
@@ -138,6 +191,10 @@ async def update_project(project_id: str, body: ProjectUpdate, current_user: Cur
         if body.status not in ("active", "archived"):
             raise HTTPException(status_code=400, detail="status must be 'active' or 'archived'")
         updates["status"] = body.status
+        updates["archived"] = body.status == "archived"
+    if body.archived is not None:
+        updates["archived"] = body.archived
+        updates["status"] = "archived" if body.archived else "active"
     doc_ref.update(updates)
     return _to_response(project_id, {**doc.to_dict(), **updates})
 
@@ -148,6 +205,18 @@ async def archive_project(project_id: str, current_user: CurrentUser):
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
-    updates = {"status": "archived", "updated_at": datetime.now(UTC)}
+    updates = {"status": "archived", "archived": True, "updated_at": datetime.now(UTC)}
+    doc_ref.update(updates)
+    return _to_response(project_id, {**doc.to_dict(), **updates})
+
+
+@router.post("/api/projects/{project_id}/unarchive", response_model=ProjectResponse)
+async def unarchive_project(project_id: str, current_user: CurrentUser):
+    """Sprint UX-01: re-activate an archived Project."""
+    doc_ref = _ref().document(project_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Project not found")
+    updates = {"status": "active", "archived": False, "updated_at": datetime.now(UTC)}
     doc_ref.update(updates)
     return _to_response(project_id, {**doc.to_dict(), **updates})

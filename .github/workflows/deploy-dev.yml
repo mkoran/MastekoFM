@@ -86,21 +86,21 @@ jobs:
           target: ${{ env.HOSTING_TARGET }}
           channelId: live
 
-      # ── Smoke tests ─────────────────────────────────────────────────────────
-      - name: Health check
+      # ── Smoke tests (Sprint UX-01) ──────────────────────────────────────────
+      - name: Post-deploy smoke tests
+        env:
+          # AUTH_TOKEN uses DEV_AUTH_BYPASS — must remain enabled on DEV service.
+          # PROD's smoke script does not pass AUTH_TOKEN so authenticated endpoints
+          # are skipped there.
+          AUTH_TOKEN: dev-ci-smoke@example.com
         run: |
           SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
             --project="$PROJECT_ID" \
             --region="$REGION" \
             --format="value(status.url)")
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/health")
-          FULL=$(curl -s "$SERVICE_URL/api/health/full")
-          echo "/health: $STATUS"
-          echo "/api/health/full: $FULL"
-          if [[ "$STATUS" != "200" ]]; then
-            echo "::error::Health check failed"
-            exit 1
-          fi
+          export API_BASE_URL="$SERVICE_URL"
+          export HOSTING_URL="https://${HOSTING_TARGET}-masteko-fm.web.app"
+          ./scripts/smoke/post_deploy_smoke.sh
 
       # ── Commit VERSION bump back to the branch ──────────────────────────────
       - name: Commit VERSION bump

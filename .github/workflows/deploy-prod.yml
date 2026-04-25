@@ -65,13 +65,12 @@ jobs:
           target: ${{ env.HOSTING_TARGET }}
           channelId: live
 
-      - name: Smoke test
+      - name: Post-deploy smoke tests (PROD)
+        # PROD never sets DEV_AUTH_BYPASS, so we only smoke-test the public surface.
+        # _AUTO_ROLLBACK=true on Cloud Build reverts traffic if smoke fails.
         run: |
           SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
             --project="$PROJECT_ID" --region="$REGION" --format="value(status.url)")
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/health")
-          if [[ "$STATUS" != "200" ]]; then
-            echo "::error::PROD health check failed — Cloud Build _AUTO_ROLLBACK should have reverted"
-            exit 1
-          fi
-          echo "PROD health: $STATUS"
+          export API_BASE_URL="$SERVICE_URL"
+          export HOSTING_URL="https://masteko-fm.web.app"
+          ./scripts/smoke/post_deploy_smoke.sh
