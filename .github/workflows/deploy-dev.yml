@@ -86,12 +86,10 @@ jobs:
           target: ${{ env.HOSTING_TARGET }}
           channelId: live
 
-      # ── Smoke tests (Sprint UX-01) ──────────────────────────────────────────
-      - name: Post-deploy smoke tests
+      # ── Smoke tests (Sprint UX-01 + INFRA-002) ──────────────────────────────
+      - name: Post-deploy smoke (health + auth + frontend)
         env:
           # AUTH_TOKEN uses DEV_AUTH_BYPASS — must remain enabled on DEV service.
-          # PROD's smoke script does not pass AUTH_TOKEN so authenticated endpoints
-          # are skipped there.
           AUTH_TOKEN: dev-ci-smoke@example.com
         run: |
           SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
@@ -101,6 +99,22 @@ jobs:
           export API_BASE_URL="$SERVICE_URL"
           export HOSTING_URL="https://${HOSTING_TARGET}-masteko-fm.web.app"
           ./scripts/smoke/post_deploy_smoke.sh
+
+      - name: E2E smoke (Sprint INFRA-002 — seed + run + assert Sum=12)
+        # Uses Workload Identity Federation creds to mint a Drive-scoped token.
+        # Requires the deployer service account to have Editor access to the
+        # Drive root folder configured for MastekoFM (one-time setup by Marc).
+        env:
+          AUTH_TOKEN: dev-ci-smoke@example.com
+        run: |
+          pip install --quiet google-auth openpyxl
+          SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --format="value(status.url)")
+          export API_BASE_URL="$SERVICE_URL"
+          # --required: this is CI, the deploy MUST fail if e2e fails.
+          python scripts/smoke/e2e_run_smoke.py --required
 
       # ── Commit VERSION bump back to the branch ──────────────────────────────
       - name: Commit VERSION bump

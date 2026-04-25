@@ -15,6 +15,7 @@
 | **A.5** | Tree Navigator — hierarchical browser (Project → Pack → Inputs/Outputs/Runs → cells) | M (~3-4 days) | B — **✅ shipped v2.003** |
 | **INFRA-001** | CI/CD via GitHub Actions + Workload Identity Federation — auto-deploy on push, no re-auth | S (~1 day) | B — **✅ scaffolding shipped, awaits Marc setup** |
 | **UX-01** | Bug bash (Create Pack 500, Calculate no-op) + UX polish (Projects/Models/Runs columns + filters + archive) + CI smoke gates for all gaps | L (~5-7 days) | A.5 — **✅ shipped v2.004** |
+| **INFRA-002** | E2E smoke (seed + run + assert Sum=12) in CI — closes Sprint UX-01's "what the bash smoke can't catch" gap | XS (~2h) | UX-01 — **✅ shipped (script + workflow); activates fully when Marc shares Drive root with deployer SA** |
 | **C** | Async runs via Cloud Tasks — POST returns immediately, worker processes, status polling | M (~4-5 days) | B |
 | **D** | PDF OutputTemplates — WeasyPrint + first investor summary template for Campus Adele | S (~2-3 days) | B (can run parallel with C) |
 | **E** | Multi-user permissions — Project members, owner/editor/viewer roles, Drive sharing automation | M (~4-5 days) | B |
