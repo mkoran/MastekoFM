@@ -14,21 +14,63 @@
 #                  unauthenticated endpoints are smoke-tested. CI sets this
 #                  via DEV auth bypass (token "dev-ci-smoke@example.com")
 #                  when DEV_AUTH_BYPASS=true on the service.
-set -euo pipefail
+#
+# Note: avoids set -u because macOS bash 3.2 mishandles empty arrays under it.
+set -eo pipefail
 
 API_BASE_URL="${API_BASE_URL:?API_BASE_URL is required}"
 HOSTING_URL="${HOSTING_URL:?HOSTING_URL is required}"
 AUTH_TOKEN="${AUTH_TOKEN:-}"
+AUTH_HEADER=""
+if [[ -n "$AUTH_TOKEN" ]]; then
+    AUTH_HEADER="Authorization: Bearer $AUTH_TOKEN"
+fi
 
 PASS=0
 FAIL=0
 
-check() {
-    local name="$1"; shift
-    local expected="$1"; shift
-    local actual
-    actual=$("$@" 2>&1) || true
-    if [[ "$actual" == *"$expected"* || "$actual" == "$expected" ]]; then
+# Fetch the HTTP status code for a GET (or POST with $1 == "POST").
+status_get() {
+    local url="$1"
+    if [[ -n "$AUTH_HEADER" ]]; then
+        curl -s -o /dev/null -w "%{http_code}" -H "$AUTH_HEADER" "$url"
+    else
+        curl -s -o /dev/null -w "%{http_code}" "$url"
+    fi
+}
+
+status_get_noauth() {
+    local url="$1"
+    curl -s -o /dev/null -w "%{http_code}" "$url"
+}
+
+status_post() {
+    local url="$1"
+    if [[ -n "$AUTH_HEADER" ]]; then
+        curl -s -o /dev/null -w "%{http_code}" -X POST -H "$AUTH_HEADER" "$url"
+    else
+        curl -s -o /dev/null -w "%{http_code}" -X POST "$url"
+    fi
+}
+
+body_get() {
+    local url="$1"
+    if [[ -n "$AUTH_HEADER" ]]; then
+        curl -s -H "$AUTH_HEADER" "$url"
+    else
+        curl -s "$url"
+    fi
+}
+
+headers_get() {
+    local url="$1"
+    curl -sI "$url" | tr -d '\r'
+}
+
+# assert_eq <name> <expected> <actual>
+assert_eq() {
+    local name="$1" expected="$2" actual="$3"
+    if [[ "$actual" == "$expected" ]]; then
         echo "  ✓ $name"
         PASS=$((PASS + 1))
     else
@@ -37,48 +79,44 @@ check() {
     fi
 }
 
-http_status() {
-    local url="$1"; shift
-    local extra=("$@")
-    curl -s -o /dev/null -w "%{http_code}" "${extra[@]}" "$url"
-}
-
-http_body_contains() {
-    local url="$1"; shift
-    local needle="$1"; shift
-    local extra=("$@")
-    local body
-    body=$(curl -s "${extra[@]}" "$url")
-    [[ "$body" == *"$needle"* ]] && echo "$needle" || echo "MISS"
+# assert_contains <name> <needle> <haystack>
+assert_contains() {
+    local name="$1" needle="$2" haystack="$3"
+    if [[ "$haystack" == *"$needle"* ]]; then
+        echo "  ✓ $name"
+        PASS=$((PASS + 1))
+    else
+        echo "  ✗ $name (missing '$needle')"
+        FAIL=$((FAIL + 1))
+    fi
 }
 
 echo "── Backend health ─────────────────────────────────────────────"
-check "/health returns 200" "200" http_status "$API_BASE_URL/health"
-check "/api/health/full returns 200" "200" http_status "$API_BASE_URL/api/health/full"
-check "/api/health/full reports api ok" "ok" http_body_contains "$API_BASE_URL/api/health/full" '"api":"ok"'
+assert_eq       "/health returns 200"            "200" "$(status_get_noauth "$API_BASE_URL/health")"
+assert_eq       "/api/health/full returns 200"   "200" "$(status_get_noauth "$API_BASE_URL/api/health/full")"
+assert_contains "/api/health/full reports api ok" '"api":"ok"' "$(curl -s "$API_BASE_URL/api/health/full")"
 
 echo
 echo "── Auth surface ───────────────────────────────────────────────"
-check "/api/projects returns 401 unauthenticated" "401" http_status "$API_BASE_URL/api/projects"
+assert_eq "/api/projects returns 401 unauthenticated" "401" "$(status_get_noauth "$API_BASE_URL/api/projects")"
 
 if [[ -n "$AUTH_TOKEN" ]]; then
-    AUTH=( -H "Authorization: Bearer $AUTH_TOKEN" )
     echo
     echo "── Authenticated endpoints (UX-01 smoke) ──────────────────────"
-    check "/api/projects 200 with auth"               "200" http_status "$API_BASE_URL/api/projects" "${AUTH[@]}"
-    check "/api/models 200 with auth"                 "200" http_status "$API_BASE_URL/api/models" "${AUTH[@]}"
-    check "/api/output-templates 200 with auth"       "200" http_status "$API_BASE_URL/api/output-templates" "${AUTH[@]}"
-    check "/api/runs 200 with auth"                   "200" http_status "$API_BASE_URL/api/runs" "${AUTH[@]}"
-    check "/api/projects?include_archived=true 200"   "200" http_status "$API_BASE_URL/api/projects?include_archived=true" "${AUTH[@]}"
-    check "/api/seed/helloworld 400 without drive token" "400" http_status -X POST "$API_BASE_URL/api/seed/helloworld" "${AUTH[@]}"
+    assert_eq "/api/projects 200 with auth"             "200" "$(status_get "$API_BASE_URL/api/projects")"
+    assert_eq "/api/models 200 with auth"               "200" "$(status_get "$API_BASE_URL/api/models")"
+    assert_eq "/api/output-templates 200 with auth"     "200" "$(status_get "$API_BASE_URL/api/output-templates")"
+    assert_eq "/api/runs 200 with auth"                 "200" "$(status_get "$API_BASE_URL/api/runs")"
+    assert_eq "/api/projects?include_archived=true 200" "200" "$(status_get "$API_BASE_URL/api/projects?include_archived=true")"
+    assert_eq "/api/seed/helloworld 400 without drive token" "400" "$(status_post "$API_BASE_URL/api/seed/helloworld")"
 fi
 
 echo
 echo "── Frontend (UX-01-05) ────────────────────────────────────────"
-check "Hosting root returns 200" "200" http_status "$HOSTING_URL/"
-check "Hosting serves MastekoFM bundle" "MastekoFM" http_body_contains "$HOSTING_URL/" "MastekoFM"
+assert_eq       "Hosting root returns 200"      "200"        "$(status_get_noauth "$HOSTING_URL/")"
+assert_contains "Hosting serves MastekoFM bundle" "MastekoFM"  "$(curl -s "$HOSTING_URL/")"
 # index.html is set to no-cache in firebase.json — verify the header survived
-check "index.html sends no-cache" "no-cache" bash -c "curl -sI '$HOSTING_URL/' | tr -d '\r'"
+assert_contains "index.html sends no-cache"     "no-cache"   "$(headers_get "$HOSTING_URL/")"
 
 echo
 echo "──────────────────────────────────────────────────────────────"
