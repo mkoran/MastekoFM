@@ -13,6 +13,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY VERSION .
 COPY backend/app/ ./backend/app/
+# Sprint A: ship the canonical seed files (Hello World, etc.) inside the container
+# so /api/seed/* endpoints can read them. Read-only at runtime.
+COPY seed/ ./seed/
 
 # === TEST ===
 FROM base AS test
