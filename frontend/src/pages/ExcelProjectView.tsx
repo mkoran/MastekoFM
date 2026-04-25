@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
+import NewRunModal from '../components/NewRunModal'
 
 interface ExcelProject {
   id: string
@@ -73,6 +74,7 @@ export default function ExcelProjectView() {
   const [newStorageKind, setNewStorageKind] = useState<'' | 'gcs' | 'drive_xlsx'>('')
   const uploadFileRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
+  const [showRunModal, setShowRunModal] = useState(false)
 
   const loadProject = () => {
     if (!projectId || !token) return  // wait until auth token is ready
@@ -177,12 +179,24 @@ export default function ExcelProjectView() {
         <div>
           <h1 className="text-2xl font-semibold text-gray-900">{project.name}</h1>
           <p className="mt-1 text-sm text-gray-600">
-            Template: <span className="font-medium">{project.template_name}</span> (pinned to v{project.template_version_pinned})
+            Default Model: <span className="font-medium">{project.template_name}</span> (pinned to v{project.template_version_pinned})
           </p>
           {project.description && <p className="mt-1 text-xs text-gray-500">{project.description}</p>}
         </div>
-        <Link to="/excel-projects" className="text-sm text-blue-600 hover:underline">← All Excel Projects</Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowRunModal(true)}
+            className="rounded bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700"
+          >
+            + New Run
+          </button>
+          <Link to="/excel-projects" className="text-sm text-blue-600 hover:underline">← All Projects</Link>
+        </div>
       </div>
+
+      {showRunModal && projectId && (
+        <NewRunModal projectId={projectId} onClose={() => setShowRunModal(false)} />
+      )}
 
       {message && (
         <div className={`mb-4 rounded px-4 py-2 ${message.type === 'success' ? 'bg-green-50 text-green-800' : 'bg-red-50 text-red-800'}`}>

@@ -14,6 +14,9 @@ import SettingsPage from './pages/SettingsPage'
 import ExcelTemplatesPage from './pages/ExcelTemplatesPage'
 import ExcelProjectsPage from './pages/ExcelProjectsPage'
 import ExcelProjectView from './pages/ExcelProjectView'
+import OutputTemplatesPage from './pages/OutputTemplatesPage'
+import RunsPage from './pages/RunsPage'
+import RunDetailPage from './pages/RunDetailPage'
 
 function P({ children }: { children: React.ReactNode }) {
   return <ProtectedRoute><Layout>{children}</Layout></ProtectedRoute>
@@ -37,6 +40,10 @@ function AppRoutes() {
       <Route path="/excel-templates" element={<P><ExcelTemplatesPage /></P>} />
       <Route path="/excel-projects" element={<P><ExcelProjectsPage /></P>} />
       <Route path="/excel-projects/:projectId" element={<P><ExcelProjectView /></P>} />
+      {/* Sprint A — three-way composition routes */}
+      <Route path="/output-templates" element={<P><OutputTemplatesPage /></P>} />
+      <Route path="/runs" element={<P><RunsPage /></P>} />
+      <Route path="/runs/:runId" element={<P><RunDetailPage /></P>} />
       <Route path="/templates" element={<P><TemplatesPage /></P>} />
       <Route path="/template-groups" element={<P><TemplateGroupsPage /></P>} />
       <Route path="/template-groups/:groupId" element={<P><TemplateGroupsPage /></P>} />

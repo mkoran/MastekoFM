@@ -23,25 +23,39 @@ logger = logging.getLogger(__name__)
 
 INPUT_PREFIX = "I_"
 OUTPUT_PREFIX = "O_"
+M_PREFIX = "M_"
+
+# Roles for validate_template — used by Sprint A and beyond.
+ROLE_MODEL = "model"
+ROLE_ASSUMPTION_PACK = "assumption_pack"
+ROLE_OUTPUT_TEMPLATE_XLSX = "output_template_xlsx"
 
 
 def classify_tabs(wb: openpyxl.Workbook) -> dict[str, list[str]]:
     """Classify a workbook's tabs by case-sensitive prefix.
 
-    Returns {"input_tabs": [...], "output_tabs": [...], "calc_tabs": [...]}.
+    Returns {"input_tabs", "output_tabs", "m_tabs", "calc_tabs"}.
     Ordering follows the sheet order in the workbook.
     """
     input_tabs: list[str] = []
     output_tabs: list[str] = []
+    m_tabs: list[str] = []
     calc_tabs: list[str] = []
     for name in wb.sheetnames:
         if name.startswith(INPUT_PREFIX):
             input_tabs.append(name)
         elif name.startswith(OUTPUT_PREFIX):
             output_tabs.append(name)
+        elif name.startswith(M_PREFIX):
+            m_tabs.append(name)
         else:
             calc_tabs.append(name)
-    return {"input_tabs": input_tabs, "output_tabs": output_tabs, "calc_tabs": calc_tabs}
+    return {
+        "input_tabs": input_tabs,
+        "output_tabs": output_tabs,
+        "m_tabs": m_tabs,
+        "calc_tabs": calc_tabs,
+    }
 
 
 def classify_bytes(content: bytes) -> dict[str, list[str]]:
@@ -53,24 +67,146 @@ def classify_bytes(content: bytes) -> dict[str, list[str]]:
         wb.close()
 
 
-def validate_template(wb: openpyxl.Workbook) -> list[str]:
+def validate_template(wb: openpyxl.Workbook, role: str = ROLE_MODEL) -> list[str]:
     """Return a list of human-readable validation errors. Empty list = valid.
 
-    Rules:
-      - At least one I_ tab must exist.
+    Universal rules (all roles):
       - No duplicate tab names (openpyxl enforces this but we surface a clearer error).
       - Tab names must not begin with an ASCII dot (Excel rejects these).
+
+    Per-role rules:
+      ROLE_MODEL                 — must have ≥1 I_; must have ≥1 O_; must NOT have M_.
+      ROLE_ASSUMPTION_PACK       — must have ≥1 I_; must NOT have O_, M_, or calc tabs.
+      ROLE_OUTPUT_TEMPLATE_XLSX  — must have ≥1 O_; must NOT have I_; M_ optional but if any
+                                    must match a Model O_ at run-validate time (separate check).
     """
     errors: list[str] = []
-    classes = classify_tabs(wb)
-    if not classes["input_tabs"]:
-        errors.append("Template has no I_ tabs. At least one input tab is required.")
     if len(wb.sheetnames) != len(set(wb.sheetnames)):
-        errors.append("Template has duplicate tab names.")
+        errors.append("Workbook has duplicate tab names.")
     for n in wb.sheetnames:
         if n.startswith("."):
             errors.append(f"Tab name {n!r} is invalid (starts with a dot).")
+
+    classes = classify_tabs(wb)
+
+    if role == ROLE_MODEL:
+        if not classes["input_tabs"]:
+            errors.append("Model has no I_ tabs. At least one input tab is required.")
+        if not classes["output_tabs"]:
+            errors.append("Model has no O_ tabs. At least one output tab is required.")
+        if classes["m_tabs"]:
+            errors.append(
+                "Model contains M_ tabs (only OutputTemplates may have M_ tabs): "
+                + ", ".join(classes["m_tabs"])
+            )
+    elif role == ROLE_ASSUMPTION_PACK:
+        if not classes["input_tabs"]:
+            errors.append("AssumptionPack has no I_ tabs.")
+        non_input = classes["output_tabs"] + classes["m_tabs"] + classes["calc_tabs"]
+        if non_input:
+            errors.append(
+                "AssumptionPack contains tabs that are not I_ tabs: "
+                + ", ".join(non_input)
+            )
+    elif role == ROLE_OUTPUT_TEMPLATE_XLSX:
+        if not classes["output_tabs"]:
+            errors.append("OutputTemplate has no O_ tabs (the user-facing artifact).")
+        if classes["input_tabs"]:
+            errors.append(
+                "OutputTemplate contains I_ tabs (those belong on Models/AssumptionPacks): "
+                + ", ".join(classes["input_tabs"])
+            )
+    else:
+        errors.append(f"Unknown role: {role!r}")
+
     return errors
+
+
+def basename(tab_name: str) -> str:
+    """Strip the I_/O_/M_ prefix to get the matching key. 'I_Foo' -> 'Foo'."""
+    for p in (INPUT_PREFIX, OUTPUT_PREFIX, M_PREFIX):
+        if tab_name.startswith(p):
+            return tab_name.removeprefix(p)
+    return tab_name
+
+
+def extract_model_outputs(recalced_model_bytes: bytes) -> dict[str, dict[str, Any]]:
+    """Read all O_* tab cells from a recalculated Model workbook.
+
+    Returns {"O_<tab>": {"<cell_ref>": <value>}}.
+    Uses data_only=True to read cached values produced by LibreOffice recalc.
+    """
+    import os
+    import tempfile
+
+    # openpyxl needs a real path for data_only — use a temp file
+    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as tmp:
+        tmp.write(recalced_model_bytes)
+        tmp_path = tmp.name
+    try:
+        wb = openpyxl.load_workbook(tmp_path, data_only=True)
+    finally:
+        os.unlink(tmp_path)
+
+    out: dict[str, dict[str, Any]] = {}
+    try:
+        for tab in wb.sheetnames:
+            if not tab.startswith(OUTPUT_PREFIX):
+                continue
+            ws = wb[tab]
+            cells: dict[str, Any] = {}
+            for row in ws.iter_rows():
+                for c in row:
+                    if c.value is not None and not isinstance(c, MergedCell):
+                        cells[c.coordinate] = c.value
+            out[tab] = cells
+        return out
+    finally:
+        wb.close()
+
+
+def overlay_outputs_onto_template(
+    output_template_bytes: bytes,
+    model_outputs: dict[str, dict[str, Any]],
+) -> tuple[bytes, list[str]]:
+    """Inject Model O_<name> values into OutputTemplate M_<name> cells.
+
+    Returns (merged_template_bytes, warnings).
+    Skips M_ tabs that have no matching O_ tab (validator should have caught this;
+    surfaces a warning here as defense in depth).
+    """
+    wb = openpyxl.load_workbook(io.BytesIO(output_template_bytes), data_only=False)
+    warnings: list[str] = []
+    try:
+        for tab_name in wb.sheetnames:
+            if not tab_name.startswith(M_PREFIX):
+                continue
+            base = tab_name.removeprefix(M_PREFIX)
+            source_o_tab = OUTPUT_PREFIX + base
+            if source_o_tab not in model_outputs:
+                warnings.append(
+                    f"OutputTemplate's {tab_name!r} has no matching {source_o_tab!r} in Model output"
+                )
+                continue
+
+            dst_ws = wb[tab_name]
+            cell_values = model_outputs[source_o_tab]
+
+            # Unmerge destination first so we can write everywhere
+            for merge in list(dst_ws.merged_cells.ranges):
+                dst_ws.unmerge_cells(str(merge))
+
+            for cell_ref, value in cell_values.items():
+                try:
+                    dst_ws[cell_ref].value = value
+                except (AttributeError, ValueError) as e:
+                    warnings.append(f"Could not write {cell_ref} on {tab_name!r}: {e}")
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue(), warnings
+    finally:
+        wb.close()
 
 
 def extract_scenario_from_template(template_bytes: bytes) -> bytes:

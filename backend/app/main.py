@@ -13,8 +13,11 @@ from backend.app.routers import (
     excel_seed,
     excel_templates,
     health,
+    output_templates,
     projects,
+    runs,
     scenarios,
+    seed,
     spreadsheets,
     template_groups,
     templates,
@@ -51,3 +54,7 @@ app.include_router(excel_templates.router)
 app.include_router(excel_projects.router)
 app.include_router(scenarios.router)
 app.include_router(excel_seed.router)
+# Sprint A — three-way composition: OutputTemplates + Runs + Hello World seed
+app.include_router(output_templates.router)
+app.include_router(runs.router)
+app.include_router(seed.router)

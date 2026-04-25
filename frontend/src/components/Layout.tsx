@@ -79,9 +79,9 @@ function Layout({ children }: { children: React.ReactNode }) {
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3 text-sm">
-          {/* Excel Projects (new primary nav) */}
+          {/* Projects */}
           <Link to="/excel-projects" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/excel-projects') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-            <span className="text-xs">&#9632;</span> Excel Projects
+            <span className="text-xs">&#9632;</span> Projects
           </Link>
           {excelProjects.map((p) => (
             <div key={p.id}>
@@ -113,7 +113,15 @@ function Layout({ children }: { children: React.ReactNode }) {
           ))}
 
           <Link to="/excel-templates" className={`mt-2 mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/excel-templates') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
-            <span className="text-xs">&#9632;</span> Excel Templates
+            <span className="text-xs">&#9632;</span> Models
+          </Link>
+
+          <Link to="/output-templates" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/output-templates') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+            <span className="text-xs">&#9632;</span> Output Templates
+          </Link>
+
+          <Link to="/runs" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/runs') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+            <span className="text-xs">&#9632;</span> Runs
           </Link>
 
           <div className="my-3 border-t border-gray-700" />
