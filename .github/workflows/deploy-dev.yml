@@ -1,0 +1,112 @@
+name: Deploy DEV
+
+# Auto-deploys on push to any epic/* branch (DEV is recoverable; standing auth per CLAUDE.md).
+# Backend: Cloud Build → Cloud Run service masteko-fm-api-dev.
+# Frontend: Firebase Hosting target dev.
+
+on:
+  push:
+    branches: ['epic/**']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to commit the VERSION bump back
+  id-token: write   # required for Workload Identity Federation
+
+env:
+  PROJECT_ID:        ${{ vars.GCP_PROJECT_ID }}
+  REGION:            ${{ vars.GCP_REGION }}
+  SERVICE_NAME:      ${{ vars.GCP_BACKEND_SERVICE }}      # e.g., masteko-fm-api-dev
+  HOSTING_TARGET:    ${{ vars.FIREBASE_HOSTING_TARGET }}  # dev | prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Bump VERSION (MAJOR.NNN) ────────────────────────────────────────────
+      - name: Bump VERSION
+        id: bump
+        run: |
+          CURRENT=$(cat VERSION)
+          if [[ ! "$CURRENT" =~ ^[0-9]+\.[0-9]{3}$ ]]; then
+            echo "::error::VERSION '$CURRENT' invalid (expected MAJOR.NNN)"
+            exit 1
+          fi
+          MAJOR="${CURRENT%%.*}"
+          COUNTER="${CURRENT##*.}"
+          COUNTER=$((10#$COUNTER + 1))
+          NEW="${MAJOR}.$(printf '%03d' $COUNTER)"
+          echo "$NEW" > VERSION
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "Version: $CURRENT -> $NEW"
+
+      # ── Auth to GCP via Workload Identity Federation (no secrets!) ──────────
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA_EMAIL }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      # ── Build frontend ──────────────────────────────────────────────────────
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      # ── Submit Cloud Build (backend image) ──────────────────────────────────
+      - name: Submit Cloud Build
+        run: |
+          gcloud builds submit \
+            --project="$PROJECT_ID" \
+            --config=cloudbuild.yaml \
+            --substitutions="_SERVICE_NAME=${SERVICE_NAME},_ENVIRONMENT=dev,_VERSION=${{ steps.bump.outputs.version }}"
+
+      # ── Deploy frontend to Firebase Hosting ─────────────────────────────────
+      - name: Deploy Firebase Hosting
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          projectId: ${{ vars.GCP_PROJECT_ID }}
+          target: ${{ env.HOSTING_TARGET }}
+          channelId: live
+
+      # ── Smoke tests ─────────────────────────────────────────────────────────
+      - name: Health check
+        run: |
+          SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
+            --project="$PROJECT_ID" \
+            --region="$REGION" \
+            --format="value(status.url)")
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/health")
+          FULL=$(curl -s "$SERVICE_URL/api/health/full")
+          echo "/health: $STATUS"
+          echo "/api/health/full: $FULL"
+          if [[ "$STATUS" != "200" ]]; then
+            echo "::error::Health check failed"
+            exit 1
+          fi
+
+      # ── Commit VERSION bump back to the branch ──────────────────────────────
+      - name: Commit VERSION bump
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add VERSION
+          git commit -m "chore: bump version to ${{ steps.bump.outputs.version }} [skip ci]" || echo "No version change"
+          git push

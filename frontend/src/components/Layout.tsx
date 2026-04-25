@@ -54,6 +54,12 @@ function Layout({ children }: { children: React.ReactNode }) {
 
         <nav className="flex-1 overflow-y-auto px-2 py-3 text-sm">
           <Link
+            to="/tree"
+            className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${location.pathname.startsWith('/tree') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
+          >
+            <span className="text-xs">🌳</span> Tree Navigator
+          </Link>
+          <Link
             to="/projects"
             className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/projects') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}
           >

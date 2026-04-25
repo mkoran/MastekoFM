@@ -19,6 +19,7 @@ from backend.app.routers import (
     runs,
     seed,
     settings,
+    tree,
 )
 
 app = FastAPI(
@@ -47,3 +48,5 @@ app.include_router(assumption_packs.router)
 app.include_router(runs.router)
 app.include_router(settings.router)
 app.include_router(seed.router)
+# Sprint A.5 — Tree Navigator endpoints
+app.include_router(tree.router)

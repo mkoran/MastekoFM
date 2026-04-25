@@ -12,6 +12,7 @@ import ProjectView from './pages/ProjectView'
 import OutputTemplatesPage from './pages/OutputTemplatesPage'
 import RunsPage from './pages/RunsPage'
 import RunDetailPage from './pages/RunDetailPage'
+import TreePage from './pages/TreePage'
 
 function P({ children }: { children: React.ReactNode }) {
   return <ProtectedRoute><Layout>{children}</Layout></ProtectedRoute>
@@ -38,6 +39,12 @@ function AppRoutes() {
       <Route path="/output-templates" element={<P><OutputTemplatesPage /></P>} />
       <Route path="/runs" element={<P><RunsPage /></P>} />
       <Route path="/runs/:runId" element={<P><RunDetailPage /></P>} />
+      {/* Sprint A.5 — Tree Navigator */}
+      <Route path="/tree" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
+      <Route path="/tree/projects/:projectId" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
+      <Route path="/tree/projects/:projectId/packs/:packId" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
+      <Route path="/tree/projects/:projectId/packs/:packId/:nodeKind" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
+      <Route path="/tree/projects/:projectId/packs/:packId/:nodeKind/:tab/:cellRef" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
       <Route path="/settings" element={<P><SettingsPage /></P>} />
     </Routes>
   )
