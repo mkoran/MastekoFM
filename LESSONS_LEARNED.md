@@ -188,3 +188,71 @@ FROM base AS prod                  # clean image, no test deps
 - `MAJOR.NNN` — exactly one dot, zero-padded 3-digit counter.
 - Auto-bumped on DEV deploy. PROD promotes whatever DEV produced (no independent bump).
 - Git SHA captured separately via Cloud Build substitution, surfaced via `/api/version`.
+
+---
+
+## 6. Lessons learned in MastekoFM (2026-04, Excel Template MVP)
+
+### Fastly strips `X-Google-*` headers ⚡
+Firebase Hosting fronts Cloud Run via Fastly. Fastly silently strips any HTTP header matching `X-Google-*` because Google reserves that prefix for internal edge signaling. We learned this when our `X-Google-Access-Token` header (used to pass the user's Google OAuth token to the backend for Drive API calls) appeared at the browser side but was missing in the FastAPI request.headers dict.
+
+**Fix**: rename to `X-MFM-Drive-Token` (or any non-`X-Google-*` name). Bug found in v1.030, fixed in v1.032.
+
+**Diagnosis tip**: when a custom header "disappears" between browser and backend, write a temporary diagnostic endpoint that dumps `request.headers.keys()` and call it directly. Compare to the `fetch` call's headers in DevTools.
+
+### Stale bundle after deploy ⚡
+By default Firebase Hosting caches `index.html` aggressively, while Vite-hashed JS bundles in `/assets/` change filename per build. Result: a user with a cached `index.html` keeps loading the old JS hash forever, never seeing your deploys.
+
+**Fix**: in `firebase.json`, add `Cache-Control: no-cache, no-store, must-revalidate` on `/index.html` and `Cache-Control: public, max-age=31536000, immutable` on `/assets/**`. Bug fixed in v1.034.
+
+### Firebase token race on initial render ⚡
+React component's initial `useEffect` may fire before Firebase's `onAuthStateChanged` callback sets the token. Components fire API requests with no Authorization header → 401.
+
+**Fix**: have the API client poll for the token (up to 3s) before issuing each request. Or pass `token` as a `useEffect` dependency so the effect re-runs when it arrives. Both implemented in v1.033 (`api.ts`).
+
+### Google account switching is awkward ⚡
+When a user has multiple Google accounts in Chrome, hitting a project that one account doesn't have access to leads to a confusing "project does not exist" page. The browser doesn't auto-prompt account chooser.
+
+**Fix**: use `?authuser=N` URL param to force account index. Better: documented in OAuth setup that the right Google account must be the default in Chrome before clicking app links.
+
+### OAuth consent screen verification not needed for `drive.file` scope
+The `https://www.googleapis.com/auth/drive.file` scope is **non-sensitive** — Google does not require app verification for it. Apps can be published in Production mode immediately, accessible to any Google account, no test-user list. We learned this is the right scope choice for a Drive-integrated app: it lets MastekoFM read/write only the files it creates or the user explicitly opens, never a user's whole Drive.
+
+**Avoid**: `auth/drive` (full Drive scope) — it's restricted, requires verification, and overreaches.
+
+### Office Editing mode in Sheets is the right UX
+A `.xlsx` file in Drive opens in Google Sheets in "Office Compatibility Mode" — file format stays `.xlsx` (no conversion), but the user gets the Sheets editing experience. Saves write back as `.xlsx`. Best of both worlds: portable file format + browser editing + shareable + version history.
+
+URL pattern: `https://docs.google.com/spreadsheets/d/{drive_file_id}/edit` — opens in Office mode automatically when the file is `.xlsx`.
+
+This eliminates the need for a custom in-browser spreadsheet editor (Luckysheet, Univer, etc.) for the v1 of MastekoFM.
+
+### LibreOffice double-conversion forces recalc ⚡
+When you open an `.xlsx` in LibreOffice headless and "convert" it back to `.xlsx`, formulas don't always recalculate. Workaround: convert `.xlsx → .ods → .xlsx` — going through ODS forces a full reparse and recalc.
+
+```bash
+soffice --headless --calc --convert-to ods input.xlsx
+soffice --headless --calc --convert-to xlsx input.ods
+```
+
+Adds ~2-3 seconds per file vs single-pass. Acceptable. Implemented in `excel_engine.recalculate_with_libreoffice`.
+
+### MergedCells are read-only in openpyxl ⚡
+Trying to set `.value` on a `MergedCell` raises `AttributeError`. To overlay onto a destination tab that has merged ranges, you MUST unmerge first, then write, then re-merge from the source. The engine's `overlay_tab` does exactly this. Proven on Campus Adele which has many merged header cells.
+
+### Tab prefixes must be case-sensitive ⚡
+Campus Adele's "Construction-to-Perm" model has both `I_Inputs & Assumptions` (real input tab) and `i_Cap Table` (calc tab — lowercase `i_`). If we did case-insensitive prefix matching, we'd silently treat `i_Cap Table` as an input and overlay over it, breaking the Cap Table calculations.
+
+**Rule**: validators MUST use `str.startswith("I_")` literally. Never `.lower()`.
+
+### Cloud Tasks delivers same task twice ⚡ (pre-emptive lesson, not yet hit)
+At-least-once delivery is a Cloud Tasks guarantee. Workers MUST be idempotent: check Run.status at the start of handler. If `running` (and recently started), assume another worker has it; skip. If `completed`/`failed`, ack the task and return.
+
+### Don't auto-commit, ever
+Same lesson as MastekoDWH. CLAUDE.md restates this. Even when an agent is in flow and "knows" the commit is good — the human reviews. Saved us from at least two wrong commits during the Sprint A planning session.
+
+### Sync calculation blocks Cloud Run too long
+Campus Adele takes ~17s synchronously. Cloud Run's request timeout default is 60s but the user's browser is staring at a spinner the whole time. For one user it's tolerable. For 100 concurrent users it's catastrophic. Sprint C async is non-optional once we have real traffic.
+
+### Test with the REAL fixture, not synthetic
+Our 18 engine tests use the actual Campus Adele `.xlsx` (476 KB, 15 tabs, 13,000+ formulas). Synthetic tests would have missed the MergedCell issue, the case-sensitive prefix issue, and the cross-tab formula behavior. Real fixtures are gold.
