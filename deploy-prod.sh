@@ -36,10 +36,13 @@ cd "$SCRIPT_DIR"
 
 echo ""
 echo "Submitting Cloud Build (PROD, auto-rollback enabled)..."
+# CRITICAL: explicitly override DEV defaults from cloudbuild.yaml. Without these
+# the PROD service would run with DEV_AUTH_BYPASS=true (security hole) AND write
+# to dev_* Firestore collections (data corruption).
 BUILD_OUTPUT=$(gcloud builds submit \
     --project="$PROJECT_ID" \
     --config=cloudbuild.yaml \
-    --substitutions="_SERVICE_NAME=$SERVICE_NAME,_ENVIRONMENT=prod,_VERSION=$VERSION,_AUTO_ROLLBACK=true" \
+    --substitutions="_SERVICE_NAME=$SERVICE_NAME,_ENVIRONMENT=prod,_VERSION=$VERSION,_AUTO_ROLLBACK=true,_DEV_AUTH_BYPASS=false,_FIRESTORE_PREFIX=prod_" \
     --async \
     --format="value(id)" \
     2>&1)
@@ -94,22 +97,16 @@ echo "Deploying frontend to Firebase Hosting (prod)..."
 firebase deploy --only hosting:prod --project "$PROJECT_ID"
 
 echo ""
-echo "Running health checks..."
+echo "Running smoke tests (Sprint UX-01)..."
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
     --project="$PROJECT_ID" \
     --region="$REGION" \
     --format="value(status.url)" 2>/dev/null)
 
-HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/health")
-FULL_HEALTH=$(curl -s "$SERVICE_URL/api/health/full")
-
-echo "/health: $HEALTH_STATUS"
-echo "/api/health/full: $FULL_HEALTH"
-
-if [[ "$HEALTH_STATUS" != "200" ]]; then
-    echo "Health check failed! Initiate rollback."
-    exit 1
-fi
+# PROD never sets AUTH_TOKEN — only the public surface is smoke-tested.
+export API_BASE_URL="$SERVICE_URL"
+export HOSTING_URL="https://masteko-fm.web.app"
+./scripts/smoke/post_deploy_smoke.sh
 
 echo ""
 echo "========================================="
