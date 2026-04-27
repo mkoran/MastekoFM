@@ -1,77 +1,76 @@
-"""Pydantic models for projects."""
+"""Pydantic models for Projects (thin org scope post-Sprint-B redesign).
+
+A Project is no longer bound 1:1 to a Model. It's an organizational scope:
+- Drive folder root
+- members + roles (Sprint E)
+- optional default_model_id (just for UX convenience in the New Run modal)
+
+Runs reference Project + AssumptionPack + Model + OutputTemplate independently.
+"""
 from datetime import datetime
-from typing import Any
 
 from pydantic import BaseModel
 
 
-class Checkout(BaseModel):
-    """Project checkout (lock) state."""
-
-    user_uid: str | None = None
-    user_name: str | None = None
-    checked_out_at: datetime | None = None
-    expires_at: datetime | None = None
-
-
 class ProjectCreate(BaseModel):
-    """Request body for creating a project."""
+    """Request body for creating a Project."""
 
     name: str
     code_name: str = ""
-    template_group_id: str | None = None
+    description: str = ""
+    workspace_id: str | None = None  # Sprint G1 — defaults to user's first workspace if omitted
+    default_model_id: str | None = None  # optional pre-selected Model in the New Run modal
 
 
 class ProjectUpdate(BaseModel):
-    """Request body for updating a project."""
+    """Request body for updating a Project."""
 
     name: str | None = None
     code_name: str | None = None
-    template_group_id: str | None = None
+    description: str | None = None
+    default_model_id: str | None = None
+    status: str | None = None  # "active" | "archived"
+    archived: bool | None = None  # Sprint UX-01: explicit archive boolean
 
 
 class ProjectResponse(BaseModel):
-    """Project returned by the API."""
+    """Project record."""
 
     id: str
     name: str
     code_name: str
-    owner_uid: str
+    description: str
+    workspace_id: str | None = None  # Sprint G1
+    workspace_name: str | None = None  # Sprint G1 — denormalized
+    default_model_id: str | None = None
+    default_model_name: str | None = None
+    default_model_version: int | None = None
     status: str
-    template_group_id: str | None = None
-    template_group_name: str | None = None
-    checkout: Checkout
+    archived: bool = False  # Sprint UX-01: explicit boolean alongside status string
+    drive_folder_url: str | None = None  # Sprint UX-01: link to project Drive folder
+    created_by: str
+    created_by_email: str | None = None  # Sprint UX-01: denormalized for "Created By" column
     created_at: datetime
     updated_at: datetime
 
 
-class ProjectInDB(BaseModel):
-    """Project document as stored in Firestore."""
+class ProjectSummary(BaseModel):
+    """List-view summary for Projects."""
 
+    id: str
     name: str
-    code_name: str = ""
-    owner_uid: str
-    status: str = "active"
-    template_group_id: str | None = None
-    template_group_name: str | None = None
-    checkout: Checkout = Checkout()
-    created_at: datetime | None = None
-    updated_at: datetime | None = None
-    drive_folder_id: str | None = None
-
-    @classmethod
-    def from_firestore(cls, doc_dict: dict[str, Any]) -> "ProjectInDB":
-        """Create from Firestore document, tolerating missing fields."""
-        checkout_data = doc_dict.get("checkout", {}) or {}
-        return cls(
-            name=doc_dict.get("name", ""),
-            code_name=doc_dict.get("code_name", "") or "",
-            owner_uid=doc_dict.get("owner_uid", ""),
-            status=doc_dict.get("status", "active"),
-            template_group_id=doc_dict.get("template_group_id"),
-            template_group_name=doc_dict.get("template_group_name"),
-            checkout=Checkout(**checkout_data) if checkout_data else Checkout(),
-            created_at=doc_dict.get("created_at"),
-            updated_at=doc_dict.get("updated_at"),
-            drive_folder_id=doc_dict.get("drive_folder_id"),
-        )
+    code_name: str
+    workspace_id: str | None = None  # Sprint G1
+    workspace_name: str | None = None  # Sprint G1
+    default_model_id: str | None = None
+    default_model_name: str | None = None
+    status: str
+    archived: bool = False
+    drive_folder_url: str | None = None
+    pack_count: int = 0
+    run_count: int = 0  # Sprint UX-01: count of Runs for this project
+    last_run_at: datetime | None = None
+    last_run_status: str | None = None
+    created_by: str = ""
+    created_by_email: str | None = None
+    created_at: datetime

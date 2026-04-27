@@ -14,7 +14,10 @@ import openpyxl
 
 logger = logging.getLogger(__name__)
 
-LIBREOFFICE_TIMEOUT = 60  # seconds per step (two conversions)
+LIBREOFFICE_TIMEOUT = 120  # seconds per step (two conversions)
+# Bumped from 60s → 120s after observing cold-start LO conversions on Cloud
+# Run hitting the limit even on Hello World. Empirical: ~85s per Hello World
+# run end-to-end (two stages + Drive ops). 120s gives headroom per stage.
 
 
 def _find_libreoffice() -> str | None:

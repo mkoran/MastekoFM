@@ -1,0 +1,691 @@
+"""AssumptionPacks router — per-Project inputs-only .xlsx files + Calculate.
+
+Sprint UX-01: bug-fixed for post-Sprint-B field names (default_model_id, not
+template_id) and for Drive-backed Models (uses pack_store.load_model_bytes_compat).
+
+Storage backend defaults to Drive (per CLAUDE.md: "AssumptionPacks live in Drive
+(.xlsx). NO GCS storage for packs (post-Sprint-B)"). GCS remains as an adapter
+for legacy data and tests, but new packs default to drive_xlsx.
+
+All bytes are normalized to .xlsx at Calculate time, so the engine is identical
+regardless of backend. See services/pack_store.py for the adapter.
+"""
+import time
+from datetime import UTC, datetime
+from typing import Annotated, Any
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Request, UploadFile
+
+from backend.app.config import get_firestore_client, settings
+from backend.app.middleware.auth import get_current_user
+from backend.app.models.assumption_pack import (
+    AssumptionPackCreate,
+    AssumptionPackResponse,
+    AssumptionPackRunResponse,
+    AssumptionPackSummary,
+    AssumptionPackUpdate,
+)
+from backend.app.services import (
+    drive_service,
+    excel_template_engine,
+    pack_store,
+    storage_service,
+)
+
+router = APIRouter(tags=["assumption-packs"])
+
+CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
+
+
+def _proj_ref(project_id: str):
+    prefix = settings.firestore_collection_prefix
+    return get_firestore_client().collection(f"{prefix}projects").document(project_id)
+
+
+def _tpl_ref(template_id: str):
+    prefix = settings.firestore_collection_prefix
+    return get_firestore_client().collection(f"{prefix}models").document(template_id)
+
+
+def _scn_ref(project_id: str):
+    return _proj_ref(project_id).collection("assumption_packs")
+
+
+def _run_ref(project_id: str, scenario_id: str):
+    return _scn_ref(project_id).document(scenario_id).collection("runs")
+
+
+def _settings_doc() -> dict[str, Any]:
+    prefix = settings.firestore_collection_prefix
+    doc = get_firestore_client().collection(f"{prefix}settings").document("app").get()
+    return doc.to_dict() or {} if doc.exists else {}
+
+
+def _default_storage_kind() -> str:
+    """Sprint UX-01: default to Drive (per CLAUDE.md doctrine), not GCS.
+
+    Settings doc may override via `default_scenario_storage_kind` for back-compat
+    with existing tests/fixtures.
+    """
+    return _settings_doc().get("default_scenario_storage_kind") or pack_store.STORAGE_KIND_DRIVE_XLSX
+
+
+def _drive_root_folder_id() -> str:
+    return _settings_doc().get("drive_root_folder_id", "") or settings.drive_root_folder_id
+
+
+def _is_archived(data: dict[str, Any]) -> bool:
+    return bool(data.get("archived")) or data.get("status") == "archived"
+
+
+def _to_scenario(doc_id: str, data: dict[str, Any]) -> AssumptionPackResponse:
+    store = pack_store.store_for_scenario(data)
+    return AssumptionPackResponse(
+        id=doc_id,
+        name=data.get("name", ""),
+        code_name=data.get("code_name", ""),
+        description=data.get("description", ""),
+        project_id=data.get("project_id", ""),
+        pack_number=data.get("pack_number", 0),
+        status=data.get("status", "active"),
+        archived=_is_archived(data),
+        storage_kind=data.get("storage_kind") or store.kind,
+        storage_path=data.get("storage_path"),
+        drive_folder_id=data.get("drive_folder_id"),
+        drive_folder_url=drive_service.folder_url(data.get("drive_folder_id")),
+        drive_file_id=data.get("drive_file_id"),
+        edit_url=store.open_url(data),
+        size_bytes=data.get("size_bytes", 0),
+        version=data.get("version", 1),
+        last_run=data.get("last_run"),
+        created_by=data.get("created_by", ""),
+        created_by_email=data.get("created_by_email"),
+        created_at=data.get("created_at", datetime.now(UTC)),
+        updated_at=data.get("updated_at", datetime.now(UTC)),
+    )
+
+
+def _to_summary(doc_id: str, data: dict[str, Any]) -> AssumptionPackSummary:
+    last = data.get("last_run") or {}
+    return AssumptionPackSummary(
+        id=doc_id,
+        name=data.get("name", ""),
+        code_name=data.get("code_name", ""),
+        pack_number=data.get("pack_number", 0),
+        status=data.get("status", "active"),
+        archived=_is_archived(data),
+        version=data.get("version", 1),
+        last_run_at=last.get("completed_at") or last.get("started_at"),
+        last_run_status=last.get("status"),
+        created_by_email=data.get("created_by_email"),
+        created_at=data.get("created_at", datetime.now(UTC)),
+    )
+
+
+def _next_pack_number(project_id: str) -> int:
+    """Sprint G3: assign a sequential per-project pack number 1..99.
+
+    Walks existing packs and returns max(pack_number) + 1, falling back to 1.
+    Cap at 99 — past that, returns 99 and lets the caller decide (in practice
+    100+ packs per project is far beyond expected use).
+    """
+    max_n = 0
+    for doc in _scn_ref(project_id).stream():
+        n = (doc.to_dict() or {}).get("pack_number") or 0
+        if n > max_n:
+            max_n = n
+    return min(max_n + 1, 99)
+
+
+def _load_project_and_default_model(
+    project_id: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Load Project + its default Model.
+
+    Sprint UX-01 fix: post-Sprint-B Projects use `default_model_id`, not the
+    legacy `template_id`. Reads `default_model_id` (with `template_id` as a
+    one-time legacy fallback for any un-migrated rows). Returns 400 (not 500)
+    when a Project has no default Model bound.
+    """
+    proj_doc = _proj_ref(project_id).get()
+    if not proj_doc.exists:
+        raise HTTPException(status_code=404, detail="Project not found")
+    proj = proj_doc.to_dict()
+    model_id = proj.get("default_model_id") or proj.get("template_id")
+    if not model_id:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "Project has no default Model bound. Either set one via "
+                "PUT /api/projects/{id} with default_model_id, or use "
+                "POST /api/runs which lets you pick the Model + OutputTemplate."
+            ),
+        )
+    model_doc = _tpl_ref(model_id).get()
+    if not model_doc.exists:
+        raise HTTPException(
+            status_code=404, detail=f"Default Model {model_id} not found"
+        )
+    return proj, model_doc.to_dict()
+
+
+def _resolve_drive_folders(
+    proj_id: str, proj: dict[str, Any], project_code: str, user_token: str | None
+) -> dict[str, str]:
+    """Ensure the project's Drive folders exist; cache their ids on the project doc."""
+    if proj.get("drive_folders"):
+        return proj["drive_folders"]
+    root = _drive_root_folder_id()
+    if not root:
+        raise HTTPException(
+            status_code=400,
+            detail="No Drive root folder configured. Set one in Settings before using Drive storage.",
+        )
+    if not user_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Drive storage requires a Google Sign-In access token. Sign in with Google, not DEV login.",
+        )
+    folders = drive_service.ensure_project_folders(root, project_code, user_access_token=user_token)
+    _proj_ref(proj_id).update({"drive_folders": folders, "updated_at": datetime.now(UTC)})
+    return folders
+
+
+# ── Create / list / get ───────────────────────────────────────────────────────
+
+
+@router.post(
+    "/api/projects/{project_id}/assumption-packs",
+    response_model=AssumptionPackResponse,
+    status_code=201,
+)
+async def create_scenario(
+    project_id: str, body: AssumptionPackCreate, request: Request, current_user: CurrentUser
+):
+    """Sprint G1: Create an AssumptionPack. Seeded from the Project's default
+    Model (or cloned from another pack). Stored in Drive at:
+
+        Workspaces/{ws}/Projects/{proj}/AssumptionPacks/{pack_code}/{pack_code}_v001.xlsx
+
+    Subsequent uploads via /upload create _v002.xlsx, _v003.xlsx, etc. — that's
+    the version history Marc wanted, visible directly in Drive.
+    """
+    proj, model = _load_project_and_default_model(project_id)
+    user_token = request.headers.get("X-MFM-Drive-Token")
+    if not user_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Pack creation requires X-MFM-Drive-Token (Google Drive access token).",
+        )
+
+    # Produce seed bytes — from clone or from Model extract
+    if body.clone_from_id:
+        src_doc = _scn_ref(project_id).document(body.clone_from_id).get()
+        if not src_doc.exists:
+            raise HTTPException(status_code=404, detail="Source AssumptionPack not found")
+        src = src_doc.to_dict()
+        seed_bytes = pack_store.load_pack_bytes_compat(src, user_token=user_token)
+    else:
+        model_bytes = pack_store.load_model_bytes_compat(model, user_token=user_token)
+        seed_bytes = excel_template_engine.extract_scenario_from_template(model_bytes)
+
+    doc_ref = _scn_ref(project_id).document()
+    project_code = storage_service.safe_name(proj.get("code_name") or proj.get("name", ""), fallback="project")
+    scenario_code = storage_service.safe_name(body.code_name or body.name, fallback=doc_ref.id)
+
+    # Sprint G1: build the new Drive folder hierarchy
+    root = _drive_root_folder_id()
+    if not root:
+        raise HTTPException(status_code=400, detail="No Drive root folder configured.")
+
+    # Resolve workspace_code from the project's workspace_id
+    ws_code = "default"
+    ws_id = proj.get("workspace_id")
+    if ws_id:
+        ws_snap = (
+            get_firestore_client()
+            .collection(f"{settings.firestore_collection_prefix}workspaces")
+            .document(ws_id)
+            .get()
+        )
+        if ws_snap.exists:
+            ws_code = (ws_snap.to_dict() or {}).get("code_name", "default")
+
+    ws_folders = drive_service.ensure_workspace_folders(root, ws_code, user_access_token=user_token)
+    proj_folders = drive_service.ensure_project_folder_v2(
+        ws_folders["projects"], project_code, user_access_token=user_token
+    )
+    pack_folder_id = drive_service.ensure_pack_folder(
+        proj_folders["packs"], scenario_code, user_access_token=user_token
+    )
+
+    filename = drive_service.versioned_filename(scenario_code, 1, ext="xlsx")
+    drive_file_id = drive_service.upload_file(
+        pack_folder_id, filename, seed_bytes, pack_store.XLSX_MIME, user_access_token=user_token,
+    )
+    if not drive_file_id:
+        raise HTTPException(status_code=500, detail="Drive upload failed")
+
+    now = datetime.now(UTC)
+    pack_number = _next_pack_number(project_id)
+    data: dict[str, Any] = {
+        "name": body.name,
+        "code_name": scenario_code,
+        "description": body.description,
+        "project_id": project_id,
+        "pack_number": pack_number,
+        "status": "active",
+        "archived": False,
+        "version": 1,
+        "last_run": None,
+        "storage_kind": pack_store.STORAGE_KIND_DRIVE_XLSX,
+        "storage_path": None,
+        "drive_folder_id": pack_folder_id,
+        "drive_file_id": drive_file_id,
+        "size_bytes": len(seed_bytes),
+        "created_by": current_user["uid"],
+        "created_by_email": current_user.get("email", ""),
+        "created_at": now,
+        "updated_at": now,
+    }
+    doc_ref.set(data)
+    return _to_scenario(doc_ref.id, data)
+
+
+@router.get(
+    "/api/projects/{project_id}/assumption-packs",
+    response_model=list[AssumptionPackSummary],
+)
+async def list_scenarios(
+    project_id: str,
+    current_user: CurrentUser,
+    include_archived: bool = Query(default=False),
+):
+    """List AssumptionPacks for a Project. Hides archived by default (UX-01)."""
+    out: list[AssumptionPackSummary] = []
+    for doc in _scn_ref(project_id).stream():
+        data = doc.to_dict()
+        if not include_archived and _is_archived(data):
+            continue
+        out.append(_to_summary(doc.id, data))
+    return out
+
+
+@router.get(
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}",
+    response_model=AssumptionPackResponse,
+)
+async def get_scenario(project_id: str, scenario_id: str, current_user: CurrentUser):
+    """Get a single Scenario."""
+    doc = _scn_ref(project_id).document(scenario_id).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    return _to_scenario(doc.id, doc.to_dict())
+
+
+@router.put(
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}",
+    response_model=AssumptionPackResponse,
+)
+async def update_scenario(
+    project_id: str,
+    scenario_id: str,
+    body: AssumptionPackUpdate,
+    current_user: CurrentUser,
+):
+    """Update scenario metadata. Does not change the file."""
+    doc_ref = _scn_ref(project_id).document(scenario_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    updates: dict[str, Any] = {"updated_at": datetime.now(UTC)}
+    if body.name is not None:
+        updates["name"] = body.name
+    if body.code_name is not None:
+        updates["code_name"] = storage_service.safe_name(body.code_name)
+    if body.description is not None:
+        updates["description"] = body.description
+    if body.status is not None:
+        if body.status not in ("active", "archived"):
+            raise HTTPException(status_code=400, detail="status must be 'active' or 'archived'")
+        updates["status"] = body.status
+    doc_ref.update(updates)
+    return _to_scenario(scenario_id, {**doc.to_dict(), **updates})
+
+
+# ── File download / replace / archive ────────────────────────────────────────
+
+
+@router.get("/api/projects/{project_id}/assumption-packs/{scenario_id}/download")
+async def download_scenario(project_id: str, scenario_id: str, current_user: CurrentUser):
+    """Return the scenario's edit URL — GCS public URL or Drive docs.google URL."""
+    doc = _scn_ref(project_id).document(scenario_id).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    data = doc.to_dict()
+    store = pack_store.store_for_scenario(data)
+    return {
+        "download_url": store.open_url(data),
+        "storage_kind": data.get("storage_kind") or store.kind,
+    }
+
+
+@router.get("/api/projects/{project_id}/assumption-packs/{scenario_id}/revisions")
+async def list_pack_revisions(
+    project_id: str, scenario_id: str, current_user: CurrentUser, request: Request,
+):
+    """Sprint G2: list all versioned files in the AssumptionPack's Drive folder.
+
+    Returns the full upload history (`{pack_code}_v001.xlsx`, `_v002.xlsx`, ...)
+    with timestamps + sizes + Open-in-Sheets URLs. Sorted newest first.
+    """
+    doc = _scn_ref(project_id).document(scenario_id).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="AssumptionPack not found")
+    data = doc.to_dict()
+    folder_id = data.get("drive_folder_id")
+    code = data.get("code_name") or scenario_id
+    if not folder_id:
+        return {
+            "pack_id": scenario_id,
+            "revisions": [],
+            "note": "Legacy pack without per-pack folder (created before Sprint G1).",
+        }
+    user_token = request.headers.get("X-MFM-Drive-Token")
+    revs = drive_service.list_versioned_files(folder_id, code, user_access_token=user_token)
+    return {"pack_id": scenario_id, "code_name": code, "revisions": revs}
+
+
+@router.post(
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}/upload",
+    response_model=AssumptionPackResponse,
+)
+async def upload_scenario_file(
+    project_id: str,
+    scenario_id: str,
+    current_user: CurrentUser,
+    request: Request,
+    file: Annotated[UploadFile, File()],
+):
+    """Replace the scenario's inputs .xlsx with a user-uploaded version.
+
+    For Drive-backed scenarios this replaces the file content in place
+    (preserves the Sheets edit URL). For GCS it writes a new versioned blob.
+    In both cases the scenario `version` is bumped.
+    """
+    doc_ref = _scn_ref(project_id).document(scenario_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Scenario not found")
+    scn = doc.to_dict()
+    user_token = request.headers.get("X-MFM-Drive-Token")
+
+    new_content = await file.read()
+    if not new_content:
+        raise HTTPException(status_code=400, detail="Empty file")
+    if len(new_content) > 50 * 1024 * 1024:
+        raise HTTPException(status_code=413, detail="File too large (50MB max)")
+
+    try:
+        classes = excel_template_engine.classify_bytes(new_content)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Could not read .xlsx: {exc}") from exc
+
+    if classes["output_tabs"] or classes["calc_tabs"]:
+        raise HTTPException(
+            status_code=400,
+            detail="Scenario files must contain only I_ tabs. Unexpected tabs: "
+            + ", ".join(classes["output_tabs"] + classes["calc_tabs"]),
+        )
+    if not classes["input_tabs"]:
+        raise HTTPException(status_code=400, detail="Uploaded file has no I_ tabs.")
+
+    if not user_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Pack upload requires X-MFM-Drive-Token (Google Drive access token).",
+        )
+
+    # Sprint G1: each upload creates a NEW versioned file in the pack folder.
+    # Old versions stay accessible — that's the version history.
+    new_version = scn.get("version", 1) + 1
+    scenario_code = scn.get("code_name", "scenario")
+    filename = drive_service.versioned_filename(scenario_code, new_version, ext="xlsx")
+
+    pack_folder_id = scn.get("drive_folder_id")
+    if not pack_folder_id:
+        # Legacy pack without folder — fall back to update_file_content on the existing file
+        # (back-compat for old packs created before Sprint G1)
+        if not scn.get("drive_file_id"):
+            raise HTTPException(
+                status_code=400,
+                detail="Pack has no drive_folder_id and no drive_file_id — cannot upload.",
+            )
+        drive_service.update_file_content(
+            scn["drive_file_id"], new_content, mime_type=pack_store.XLSX_MIME,
+            user_access_token=user_token,
+        )
+        new_drive_file_id = scn["drive_file_id"]
+    else:
+        new_drive_file_id = drive_service.upload_file(
+            pack_folder_id, filename, new_content, pack_store.XLSX_MIME,
+            user_access_token=user_token,
+        )
+        if not new_drive_file_id:
+            raise HTTPException(status_code=500, detail="Drive upload failed")
+
+    updates = {
+        "version": new_version,
+        "drive_file_id": new_drive_file_id,  # latest file id (older versions stay in folder)
+        "size_bytes": len(new_content),
+        "updated_at": datetime.now(UTC),
+    }
+    doc_ref.update(updates)
+    return _to_scenario(scenario_id, {**scn, **updates})
+
+
+@router.post(
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}/archive",
+    response_model=AssumptionPackResponse,
+)
+async def archive_scenario(project_id: str, scenario_id: str, current_user: CurrentUser):
+    """Archive an AssumptionPack (non-destructive)."""
+    doc_ref = _scn_ref(project_id).document(scenario_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="AssumptionPack not found")
+    updates = {"status": "archived", "archived": True, "updated_at": datetime.now(UTC)}
+    doc_ref.update(updates)
+    return _to_scenario(scenario_id, {**doc.to_dict(), **updates})
+
+
+@router.post(
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}/unarchive",
+    response_model=AssumptionPackResponse,
+)
+async def unarchive_scenario(project_id: str, scenario_id: str, current_user: CurrentUser):
+    """Sprint UX-01: re-activate an archived AssumptionPack."""
+    doc_ref = _scn_ref(project_id).document(scenario_id)
+    doc = doc_ref.get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="AssumptionPack not found")
+    updates = {"status": "active", "archived": False, "updated_at": datetime.now(UTC)}
+    doc_ref.update(updates)
+    return _to_scenario(scenario_id, {**doc.to_dict(), **updates})
+
+
+# ── Calculate ─────────────────────────────────────────────────────────────────
+
+
+@router.post(
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}/calculate",
+    response_model=AssumptionPackRunResponse,
+)
+async def calculate_scenario(
+    project_id: str,
+    scenario_id: str,
+    request: Request,
+    current_user: CurrentUser,
+):
+    """Overlay Scenario's I_ tabs onto Template, LibreOffice recalc, upload full workbook.
+
+    Output is uploaded to GCS for a stable public download link. (Optional future:
+    also upload to Drive when the scenario is Drive-backed.)
+    """
+    proj, model = _load_project_and_default_model(project_id)
+    scn_ref = _scn_ref(project_id).document(scenario_id)
+    scn_doc = scn_ref.get()
+    if not scn_doc.exists:
+        raise HTTPException(status_code=404, detail="AssumptionPack not found")
+    scn = scn_doc.to_dict()
+    user_token = request.headers.get("X-MFM-Drive-Token")
+
+    run_ref = _run_ref(project_id, scenario_id).document()
+    started_at = datetime.now(UTC)
+    t_start = time.monotonic()
+
+    store = pack_store.store_for_scenario(scn)
+    run_data: dict[str, Any] = {
+        "scenario_id": scenario_id,
+        "project_id": project_id,
+        "status": "running",
+        "started_at": started_at,
+        "template_version_used": model.get("version", 1),
+        "scenario_version_used": scn.get("version", 1),
+        "input_storage_kind": store.kind,
+        "input_storage_path": scn.get("storage_path"),
+        "input_drive_file_id": scn.get("drive_file_id"),
+        "input_download_url": store.open_url(scn),
+        "started_by": current_user["uid"],
+    }
+    run_ref.set(run_data)
+
+    try:
+        # Sprint UX-01 fix: use compat loader so Drive-backed Models also work
+        model_bytes = pack_store.load_model_bytes_compat(model)
+        scenario_bytes = store.read_bytes(scn, user_access_token=user_token)
+        result = excel_template_engine.calculate(model_bytes, scenario_bytes)
+        output_bytes: bytes = result["output_bytes"]
+
+        project_code = storage_service.safe_name(proj.get("code_name") or proj.get("name", ""), fallback=project_id)
+        scenario_code = scn.get("code_name", "scenario")
+        ts = started_at.strftime("%Y%m%d_%H%M%S")
+        out_filename = f"{ts}_{project_code}_{scenario_code}.xlsx"
+        out_path = f"excel_projects/{project_code}/{scenario_code}/outputs/{out_filename}"
+        download_url = storage_service.upload_xlsx(out_path, output_bytes, download_filename=out_filename)
+
+        # If this is a Drive-backed scenario, also drop the output in Drive/Outputs/
+        output_drive_id: str | None = None
+        if store.kind == pack_store.STORAGE_KIND_DRIVE_XLSX and user_token:
+            try:
+                folders = _resolve_drive_folders(project_id, proj, project_code, user_token)
+                output_drive_id = drive_service.upload_file(
+                    folders["outputs"], out_filename, output_bytes,
+                    pack_store.XLSX_MIME, user_access_token=user_token,
+                )
+            except Exception:
+                # GCS copy is authoritative for the download URL; Drive is best-effort.
+                pass
+
+        completed_at = datetime.now(UTC)
+        duration_ms = int((time.monotonic() - t_start) * 1000)
+        updates = {
+            "status": "done",
+            "completed_at": completed_at,
+            "duration_ms": duration_ms,
+            "output_storage_path": out_path,
+            "output_download_url": download_url,
+            "output_drive_file_id": output_drive_id,
+            "recalculated": result["recalculated"],
+            "warnings": result.get("warnings", []),
+        }
+        run_ref.update(updates)
+
+        scn_ref.update({
+            "last_run": {
+                "run_id": run_ref.id,
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "status": "done",
+                "output_storage_path": out_path,
+                "output_download_url": download_url,
+                "output_drive_file_id": output_drive_id,
+                "duration_ms": duration_ms,
+            },
+            "updated_at": completed_at,
+        })
+
+        return AssumptionPackRunResponse(
+            id=run_ref.id,
+            scenario_id=scenario_id,
+            project_id=project_id,
+            status="done",
+            started_at=started_at,
+            completed_at=completed_at,
+            duration_ms=duration_ms,
+            template_version_used=model.get("version", 1),
+            scenario_version_used=scn.get("version", 1),
+            input_storage_kind=store.kind,
+            input_storage_path=scn.get("storage_path"),
+            input_drive_file_id=scn.get("drive_file_id"),
+            input_download_url=store.open_url(scn),
+            output_storage_path=out_path,
+            output_download_url=download_url,
+            warnings=result.get("warnings", []),
+        )
+
+    except Exception as exc:
+        completed_at = datetime.now(UTC)
+        duration_ms = int((time.monotonic() - t_start) * 1000)
+        err_msg = str(exc)
+        run_ref.update({
+            "status": "error",
+            "completed_at": completed_at,
+            "duration_ms": duration_ms,
+            "error": err_msg,
+        })
+        scn_ref.update({
+            "last_run": {
+                "run_id": run_ref.id,
+                "started_at": started_at,
+                "completed_at": completed_at,
+                "status": "error",
+                "error": err_msg,
+                "duration_ms": duration_ms,
+            },
+            "updated_at": completed_at,
+        })
+        raise HTTPException(status_code=500, detail=f"Calculation failed: {err_msg}") from exc
+
+
+@router.get(
+    "/api/projects/{project_id}/assumption-packs/{scenario_id}/runs",
+    response_model=list[AssumptionPackRunResponse],
+)
+async def list_runs(project_id: str, scenario_id: str, current_user: CurrentUser):
+    """List run history for a scenario (most recent first)."""
+    runs: list[AssumptionPackRunResponse] = []
+    for doc in _run_ref(project_id, scenario_id).order_by(
+        "started_at", direction="DESCENDING"
+    ).stream():
+        d = doc.to_dict()
+        runs.append(AssumptionPackRunResponse(
+            id=doc.id,
+            scenario_id=scenario_id,
+            project_id=project_id,
+            status=d.get("status", "unknown"),
+            started_at=d.get("started_at", datetime.now(UTC)),
+            completed_at=d.get("completed_at"),
+            duration_ms=d.get("duration_ms"),
+            template_version_used=d.get("template_version_used", 1),
+            scenario_version_used=d.get("scenario_version_used", 1),
+            input_storage_kind=d.get("input_storage_kind"),
+            input_storage_path=d.get("input_storage_path"),
+            input_drive_file_id=d.get("input_drive_file_id"),
+            input_download_url=d.get("input_download_url"),
+            output_storage_path=d.get("output_storage_path"),
+            output_download_url=d.get("output_download_url"),
+            warnings=d.get("warnings", []),
+            error=d.get("error"),
+        ))
+    return runs

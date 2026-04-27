@@ -1,16 +1,21 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { useEffect } from 'react'
 import { AuthProvider, useAuth } from './contexts/AuthContext'
 import { setTokenGetter, setGoogleTokenGetter } from './services/api'
 import ProtectedRoute from './components/ProtectedRoute'
 import Layout from './components/Layout'
-import Dashboard from './pages/Dashboard'
 import Login from './pages/Login'
-import ProjectView from './pages/ProjectView'
-import TemplatesPage from './pages/TemplatesPage'
-import TemplateGroupsPage from './pages/TemplateGroupsPage'
-import ScenarioEditor from './pages/ScenarioEditor'
 import SettingsPage from './pages/SettingsPage'
+import ModelsPage from './pages/ModelsPage'
+import ModelDetailPage from './pages/ModelDetailPage'
+import WorkspaceSettingsPage from './pages/WorkspaceSettingsPage'
+import HelpPage from './pages/HelpPage'
+import ProjectsPage from './pages/ProjectsPage'
+import ProjectView from './pages/ProjectView'
+import OutputTemplatesPage from './pages/OutputTemplatesPage'
+import RunsPage from './pages/RunsPage'
+import RunDetailPage from './pages/RunDetailPage'
+import TreePage from './pages/TreePage'
 
 function P({ children }: { children: React.ReactNode }) {
   return <ProtectedRoute><Layout>{children}</Layout></ProtectedRoute>
@@ -30,16 +35,23 @@ function AppRoutes() {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
-      <Route path="/" element={<P><Dashboard /></P>} />
-      <Route path="/templates" element={<P><TemplatesPage /></P>} />
-      <Route path="/template-groups" element={<P><TemplateGroupsPage /></P>} />
-      <Route path="/template-groups/:groupId" element={<P><TemplateGroupsPage /></P>} />
-      <Route path="/settings" element={<P><SettingsPage /></P>} />
+      <Route path="/" element={<Navigate to="/projects" replace />} />
+      <Route path="/projects" element={<P><ProjectsPage /></P>} />
       <Route path="/projects/:projectId" element={<P><ProjectView /></P>} />
-      <Route path="/projects/:projectId/datasources" element={<P><ProjectView section="datasources" /></P>} />
-      <Route path="/projects/:projectId/dag" element={<P><ProjectView section="dag" /></P>} />
-      <Route path="/projects/:projectId/reports" element={<P><ProjectView section="reports" /></P>} />
-      <Route path="/projects/:projectId/scenarios/:scenarioId" element={<P><ScenarioEditor /></P>} />
+      <Route path="/models" element={<P><ModelsPage /></P>} />
+      <Route path="/models/:modelId" element={<P><ModelDetailPage /></P>} />
+      <Route path="/output-templates" element={<P><OutputTemplatesPage /></P>} />
+      <Route path="/runs" element={<P><RunsPage /></P>} />
+      <Route path="/runs/:runId" element={<P><RunDetailPage /></P>} />
+      {/* Sprint A.5 — Tree Navigator */}
+      <Route path="/tree" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
+      <Route path="/tree/projects/:projectId" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
+      <Route path="/tree/projects/:projectId/packs/:packId" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
+      <Route path="/tree/projects/:projectId/packs/:packId/:nodeKind" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
+      <Route path="/tree/projects/:projectId/packs/:packId/:nodeKind/:tab/:cellRef" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
+      <Route path="/workspaces/:workspaceId" element={<P><WorkspaceSettingsPage /></P>} />
+      <Route path="/settings" element={<P><SettingsPage /></P>} />
+      <Route path="/help" element={<P><HelpPage /></P>} />
     </Routes>
   )
 }

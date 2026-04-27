@@ -188,3 +188,117 @@ FROM base AS prod                  # clean image, no test deps
 - `MAJOR.NNN` — exactly one dot, zero-padded 3-digit counter.
 - Auto-bumped on DEV deploy. PROD promotes whatever DEV produced (no independent bump).
 - Git SHA captured separately via Cloud Build substitution, surfaced via `/api/version`.
+
+---
+
+## 6. Lessons learned in MastekoFM (2026-04, Excel Template MVP)
+
+### Fastly strips `X-Google-*` headers ⚡
+Firebase Hosting fronts Cloud Run via Fastly. Fastly silently strips any HTTP header matching `X-Google-*` because Google reserves that prefix for internal edge signaling. We learned this when our `X-Google-Access-Token` header (used to pass the user's Google OAuth token to the backend for Drive API calls) appeared at the browser side but was missing in the FastAPI request.headers dict.
+
+**Fix**: rename to `X-MFM-Drive-Token` (or any non-`X-Google-*` name). Bug found in v1.030, fixed in v1.032.
+
+**Diagnosis tip**: when a custom header "disappears" between browser and backend, write a temporary diagnostic endpoint that dumps `request.headers.keys()` and call it directly. Compare to the `fetch` call's headers in DevTools.
+
+### Stale bundle after deploy ⚡
+By default Firebase Hosting caches `index.html` aggressively, while Vite-hashed JS bundles in `/assets/` change filename per build. Result: a user with a cached `index.html` keeps loading the old JS hash forever, never seeing your deploys.
+
+**Fix**: in `firebase.json`, add `Cache-Control: no-cache, no-store, must-revalidate` on `/index.html` and `Cache-Control: public, max-age=31536000, immutable` on `/assets/**`. Bug fixed in v1.034.
+
+### Firebase token race on initial render ⚡
+React component's initial `useEffect` may fire before Firebase's `onAuthStateChanged` callback sets the token. Components fire API requests with no Authorization header → 401.
+
+**Fix**: have the API client poll for the token (up to 3s) before issuing each request. Or pass `token` as a `useEffect` dependency so the effect re-runs when it arrives. Both implemented in v1.033 (`api.ts`).
+
+### Google account switching is awkward ⚡
+When a user has multiple Google accounts in Chrome, hitting a project that one account doesn't have access to leads to a confusing "project does not exist" page. The browser doesn't auto-prompt account chooser.
+
+**Fix**: use `?authuser=N` URL param to force account index. Better: documented in OAuth setup that the right Google account must be the default in Chrome before clicking app links.
+
+### OAuth consent screen verification not needed for `drive.file` scope
+The `https://www.googleapis.com/auth/drive.file` scope is **non-sensitive** — Google does not require app verification for it. Apps can be published in Production mode immediately, accessible to any Google account, no test-user list. We learned this is the right scope choice for a Drive-integrated app: it lets MastekoFM read/write only the files it creates or the user explicitly opens, never a user's whole Drive.
+
+**Avoid**: `auth/drive` (full Drive scope) — it's restricted, requires verification, and overreaches.
+
+### Office Editing mode in Sheets is the right UX
+A `.xlsx` file in Drive opens in Google Sheets in "Office Compatibility Mode" — file format stays `.xlsx` (no conversion), but the user gets the Sheets editing experience. Saves write back as `.xlsx`. Best of both worlds: portable file format + browser editing + shareable + version history.
+
+URL pattern: `https://docs.google.com/spreadsheets/d/{drive_file_id}/edit` — opens in Office mode automatically when the file is `.xlsx`.
+
+This eliminates the need for a custom in-browser spreadsheet editor (Luckysheet, Univer, etc.) for the v1 of MastekoFM.
+
+### LibreOffice double-conversion forces recalc ⚡
+When you open an `.xlsx` in LibreOffice headless and "convert" it back to `.xlsx`, formulas don't always recalculate. Workaround: convert `.xlsx → .ods → .xlsx` — going through ODS forces a full reparse and recalc.
+
+```bash
+soffice --headless --calc --convert-to ods input.xlsx
+soffice --headless --calc --convert-to xlsx input.ods
+```
+
+Adds ~2-3 seconds per file vs single-pass. Acceptable. Implemented in `excel_engine.recalculate_with_libreoffice`.
+
+### MergedCells are read-only in openpyxl ⚡
+Trying to set `.value` on a `MergedCell` raises `AttributeError`. To overlay onto a destination tab that has merged ranges, you MUST unmerge first, then write, then re-merge from the source. The engine's `overlay_tab` does exactly this. Proven on Campus Adele which has many merged header cells.
+
+### Tab prefixes must be case-sensitive ⚡
+Campus Adele's "Construction-to-Perm" model has both `I_Inputs & Assumptions` (real input tab) and `i_Cap Table` (calc tab — lowercase `i_`). If we did case-insensitive prefix matching, we'd silently treat `i_Cap Table` as an input and overlay over it, breaking the Cap Table calculations.
+
+**Rule**: validators MUST use `str.startswith("I_")` literally. Never `.lower()`.
+
+### Cloud Tasks delivers same task twice ⚡ (pre-emptive lesson, not yet hit)
+At-least-once delivery is a Cloud Tasks guarantee. Workers MUST be idempotent: check Run.status at the start of handler. If `running` (and recently started), assume another worker has it; skip. If `completed`/`failed`, ack the task and return.
+
+### Don't auto-commit, ever
+Same lesson as MastekoDWH. CLAUDE.md restates this. Even when an agent is in flow and "knows" the commit is good — the human reviews. Saved us from at least two wrong commits during the Sprint A planning session.
+
+### Sync calculation blocks Cloud Run too long
+Campus Adele takes ~17s synchronously. Cloud Run's request timeout default is 60s but the user's browser is staring at a spinner the whole time. For one user it's tolerable. For 100 concurrent users it's catastrophic. Sprint C async is non-optional once we have real traffic.
+
+### Test with the REAL fixture, not synthetic
+Our 18 engine tests use the actual Campus Adele `.xlsx` (476 KB, 15 tabs, 13,000+ formulas). Synthetic tests would have missed the MergedCell issue, the case-sensitive prefix issue, and the cross-tab formula behavior. Real fixtures are gold.
+
+---
+
+## 7. Sprint B / Sprint A.5 / INFRA-001 (2026-04-25)
+
+### Bulk renames need test runs after EACH replacement step ⚡
+A 17-replacement bulk script that ran in one shot caused 4 separate compile errors:
+1. `class Scenario` → `class AssumptionPack` plus `ScenarioRunResponse` → `PackRunResponse` ran in same pass, producing `class AssumptionAssumptionPackRunResponse` (double substitution)
+2. `ScenarioStore` Protocol class became `AssumptionPackStore`, but type annotations on `_STORES` dict + `get_store()` and `store_for_scenario()` returns still said `ScenarioStore`
+3. Internal collection refs `f"{prefix}excel_templates"` weren't all caught by the script's pattern matching
+4. The `backend/app/connectors/` directory wasn't in my delete list — Cloud Build caught it with a ruff failure
+
+**Lesson**: after any bulk rename touching N files, run `pytest && ruff check` BEFORE committing. The cost of running tests is seconds; the cost of a failed Cloud Build is minutes.
+
+### Don't forget hidden subdirectories on bulk delete ⚡
+`rm -v <list>` only removes files explicitly listed. Subdirectories importing deleted modules (like `backend/app/connectors/`) silently survive. Whenever you delete a category of code, do `find . -name "__init__.py" | xargs grep -l "from backend.app.models.deleted_module"` to catch stragglers.
+
+### Cloud Build's test stage is the safety net ⚡
+Cloud Run deploy = Cloud Build = `Dockerfile`'s test stage = `ruff check` + `pytest`. If local tests pass but Cloud Build fails, it's almost always: a file you forgot existed, a dependency mismatch between local venv and `backend/requirements.txt`, or a path that's case-sensitive on Linux but not Mac. Trust the test stage.
+
+### `Path(__file__).resolve().parents[N]` breaks in containers if you forget to COPY directories ⚡
+`backend/app/routers/seed.py` calculates `REPO_ROOT = Path(__file__).resolve().parents[3]` to find `seed/`. This works on dev but fails in Docker if `COPY seed/` is missing from the Dockerfile. The error is "Seed file missing: /app/seed/helloworld/...". Always COPY all dirs the runtime needs, not just `backend/app/`.
+
+### Workload Identity Federation > service account JSON keys ⚡
+For GitHub Actions ↔ GCP, WIF means zero long-lived secrets. The setup is one shell script (Service Account + IAM bindings + Workload Identity Pool + Provider + Repo binding), one set of GitHub repository variables (no secrets), and `google-github-actions/auth@v2` in the workflow. Done.
+
+Firebase Hosting still needs a service account JSON because Firebase doesn't fully support WIF for hosting deploys yet. That's one secret in GitHub Actions. Acceptable.
+
+### LibreOffice in CI matters ⚡
+Local pytest skips engine tests if LibreOffice isn't present. Cloud Build runs the test stage with `libreoffice-calc-nogui` installed, so engine tests run. GitHub Actions CI must also `apt-get install libreoffice-calc-nogui` BEFORE `pytest` or the engine tests just silently skip. They've caught two real bugs in the engine — don't lose them in CI.
+
+### A "thin org scope" entity is a useful pattern ⚡
+Sprint B refactor: `Project` was bound 1:1 to a Model (rigid). The redesign made `Project` a thin org scope: members, Drive folder, optional `default_model_id` for UX convenience. AssumptionPacks belong to Projects, but Models and OutputTemplates float free at workspace level. This separation made the three-way composition (Project + Pack + Model + OutputTemplate) much cleaner.
+
+### Bulk-rename sprints leave field-name landmines ⚡ (Sprint UX-01)
+Sprint B renamed `template_id → default_model_id` on Project. The Project router and seed code were updated, but `assumption_packs.py` still read `proj.get("template_id", "")`. Empty string went to a Firestore document lookup → 500. Two production bugs (Create Pack 500 + Calculate no-op) traced to the same one-character oversight. The fix made the search-and-replace step doubly cheap to verify in future renames:
+1. Read with `proj.get("default_model_id") or proj.get("template_id")` so legacy docs continue to work
+2. Surface 400 (not 500) when the required field is missing on the new shape, with a message that points to the alternative endpoint
+3. Pin a regression test that would fail if the field name regresses (`tests/test_assumption_packs_router.py`)
+**Lesson:** after a bulk rename, grep the **old** name across the repo, not the new one.
+
+### Make smoke tests a single script, not workflow inline curl ⚡ (Sprint UX-01)
+We had three places running similar curl `/health` checks: `deploy-dev.yml`, `deploy-prod.yml`, `deploy-dev.sh`. They drifted over A.5 (PROD didn't smoke `/api/health/full`, dev script didn't check Hosting). UX-01 consolidated to `scripts/smoke/post_deploy_smoke.sh` so adding a new smoke check (Tree endpoints, frontend HTML check, archive filter) is a one-file edit and all three deploy paths benefit. Also makes "what gets smoke-tested" a one-grep question.
+
+### Audit fields are cheaper to add early than to backfill ⚡ (Sprint UX-01)
+Sprint A persisted `created_by` (uid only). Three sprints later, the Projects list needed a "Created By" column showing the email. Adding `created_by_email` was a 5-minute schema change but every existing Firestore doc shows `—` until backfilled. Same story for `triggered_by_email` on Run. Going forward: every new entity gets `created_by`, `created_by_email`, `created_at`, `updated_at`, `archived` from day one — they're cheap fields with high optionality.

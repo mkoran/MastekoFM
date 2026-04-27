@@ -1,0 +1,46 @@
+name: PR Preview
+
+# Every PR gets an ephemeral Firebase Hosting preview channel (7 days).
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: write
+  id-token: write   # required for WIF
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA_EMAIL }}
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Deploy preview channel
+        # ADC from WIF — channel id = pr-<number>, expires 7d. No long-lived secrets.
+        run: |
+          npx firebase-tools@latest hosting:channel:deploy "pr-${{ github.event.number }}" \
+            --only hosting:dev \
+            --project ${{ vars.GCP_PROJECT_ID }} \
+            --expires 7d \
+            --non-interactive
+          # Note: preview channels share the DEV backend (api-dev), not prod

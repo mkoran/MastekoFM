@@ -24,6 +24,11 @@ class Settings(BaseSettings):
     dev_auth_bypass: bool = os.getenv("DEV_AUTH_BYPASS", "false").lower() == "true"
     drive_root_folder_id: str = os.getenv("DRIVE_ROOT_FOLDER_ID", "")
 
+    # Sprint C — async runs via Cloud Tasks
+    runs_queue: str = os.getenv("RUNS_QUEUE", "")  # e.g. "mfm-runs-dev". Empty = sync mode.
+    runs_worker_url: str = os.getenv("RUNS_WORKER_URL", "")  # base URL for /internal/tasks/run/{id}
+    runs_worker_sa: str = os.getenv("RUNS_WORKER_SA", "")  # SA email Cloud Tasks uses for OIDC
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

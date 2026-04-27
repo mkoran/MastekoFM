@@ -1,0 +1,75 @@
+name: Deploy PROD
+
+# Manual or via prod-v* tag. Requires GitHub Environment "production" approval.
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['prod-v*']
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  PROJECT_ID:        ${{ vars.GCP_PROJECT_ID }}
+  REGION:            ${{ vars.GCP_REGION }}
+  SERVICE_NAME:      masteko-fm-api-prod
+  HOSTING_TARGET:    prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: production   # Requires manual approval per GitHub Environment settings
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA_EMAIL }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Build frontend
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Read VERSION
+        id: ver
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Cloud Build (prod, no version bump)
+        run: |
+          gcloud builds submit \
+            --project="$PROJECT_ID" \
+            --config=cloudbuild.yaml \
+            --substitutions="_SERVICE_NAME=${SERVICE_NAME},_ENVIRONMENT=prod,_VERSION=${{ steps.ver.outputs.version }},_AUTO_ROLLBACK=true"
+
+      - name: Deploy Firebase Hosting (PROD)
+        # Uses ADC from WIF auth — no long-lived FIREBASE_TOKEN secret needed.
+        run: |
+          npx firebase-tools@latest deploy \
+            --only hosting:${HOSTING_TARGET} \
+            --project ${{ vars.GCP_PROJECT_ID }} \
+            --non-interactive
+
+      - name: Post-deploy smoke tests (PROD)
+        # PROD never sets DEV_AUTH_BYPASS, so we only smoke-test the public surface.
+        # _AUTO_ROLLBACK=true on Cloud Build reverts traffic if smoke fails.
+        run: |
+          SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
+            --project="$PROJECT_ID" --region="$REGION" --format="value(status.url)")
+          export API_BASE_URL="$SERVICE_URL"
+          export HOSTING_URL="https://masteko-fm.web.app"
+          ./scripts/smoke/post_deploy_smoke.sh

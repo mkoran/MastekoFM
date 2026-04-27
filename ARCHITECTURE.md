@@ -1,688 +1,456 @@
-# MastekoFM — Financial Modelling Platform
+# MastekoFM — Architecture
 
-## Product vision
-
-MastekoFM is a SaaS platform where users create **projects**, connect **data sources**, and build chains of **linked spreadsheets** — each sheet's outputs feeding into the next sheet's assumptions. The platform produces **versioned financial models** and **automated PDF reports** from any combination of inputs.
-
-It is model-agnostic: the same engine supports DCF, 3-statement, project finance, waterfall distributions, or any custom structure. The model type emerges from how the user wires their sheets together.
+> Last reviewed: 2026-04-16
+> Status: in-flight redesign (see [docs/REDESIGN_2026_04.md](docs/REDESIGN_2026_04.md))
+> Implementation phase: about to start Sprint A (Hello World vertical slice)
 
 ---
 
-## Core concepts
+## 1. What MastekoFM is
 
-### Project
-A project is the top-level container. It has a name, an owner, collaborators, and a version history. Everything below belongs to a project.
+A **financial modeling operating system**.
 
-### Data source
-A data source is a connection to external data that provides **input values** to the system. Supported source types:
+A SaaS platform that separates the three independently-versioned things a financial model is made of:
 
-| Source type | Connection method | Refresh |
-|---|---|---|
-| Airtable | API key + base ID | On-demand / scheduled |
-| Excel file | Upload to Google Drive | On re-upload |
-| CSV file | Upload to Google Drive | On re-upload |
-| Google Sheets | OAuth + sheet ID | On-demand / scheduled |
-| Manual entry | In-app form | Immediate |
-| API endpoint | URL + auth config | On-demand / scheduled |
-| Previous sheet output | Internal DAG link | Automatic |
+1. **Assumptions** (the numbers and tables a user wants to model)
+2. **Model** (the spreadsheet-based computation engine)
+3. **Output Template** (the shape of the report a user wants to produce)
 
-Each data source produces a flat key-value map of **named inputs**. Example: an Airtable base might produce `{land_cost: 2500000, unit_count: 48, avg_rent: 1850}`.
+Users compose a **Run** by picking one of each — `(AssumptionPack vN, Model vM, OutputTemplate vO)` — and the platform produces a versioned, downloadable, fully reproducible output artifact.
 
-### Assumptions layer
-The assumptions layer is the bridge between raw data sources and spreadsheet calculations. It:
+### What this is NOT
 
-1. **Maps** raw source fields to named assumption keys
-2. **Validates** types, ranges, and required fields
-3. **Versions** every change (who changed what, when, why)
-4. **Overrides** — a user can manually override any mapped value; the override is tracked separately from the source value
+- ❌ Spreadsheet management
+- ❌ A platform for editing Excel files
+- ❌ A spreadsheet-as-database tool
 
-An assumption has:
-- `key` — unique name within the project (e.g. `land_cost`)
-- `value` — current resolved value
-- `source` — which data source provided it (or "manual override")
-- `type` — number, percentage, date, currency, text, boolean
-- `category` — grouping for display (e.g. "Revenue", "Construction", "Financing")
-- `version` — auto-incremented on change
-
-### Spreadsheet (calculation node)
-A spreadsheet is a calculation engine that:
-
-1. **Declares inputs** — which assumption keys it reads
-2. **Contains formulas** — rows and columns with cell-level formulas
-3. **Declares outputs** — which cells are published as named outputs
-
-Spreadsheets are stored as **versioned templates**. The template defines structure (rows, columns, formulas). The project instance fills it with actual assumption values.
-
-**Key design decision: Excel-based engine.** Spreadsheets are `.xlsx` files with named ranges. The calculation pipeline:
-1. `openpyxl` injects assumption values into named input cells
-2. **LibreOffice headless** recalculates all formulas (full Excel formula compatibility including XIRR, XNPV, IRR, RATE, etc.)
-3. `openpyxl` extracts output values from named output cells
-
-Users can **download any sheet as a working Excel file**, edit formulas and structure in Excel, and re-upload. The platform validates that named ranges still exist and re-maps inputs/outputs. Each upload creates a new version of the sheet with full history.
-
-### DAG (directed acyclic graph)
-The spreadsheet waterfall is a DAG. Each node is a spreadsheet. Edges represent output→input mappings:
-
-```
-Sheet A (Revenue Model)
-  outputs: {gross_revenue, net_revenue, vacancy_rate}
-      ↓
-Sheet B (Operating Expenses)
-  inputs: {gross_revenue} ← from Sheet A
-  outputs: {total_opex, noi}
-      ↓
-Sheet C (Financing)
-  inputs: {noi} ← from Sheet B
-  outputs: {debt_service, cash_after_debt}
-      ↓
-Sheet D (Returns Analysis)
-  inputs: {cash_after_debt} ← from Sheet C, {land_cost} ← from Assumptions
-  outputs: {irr, npv, equity_multiple, cash_on_cash}
-```
-
-The DAG is validated: no cycles allowed. When an upstream sheet recalculates, all downstream sheets recalculate in topological order.
-
-### Report generator
-Reports are PDF documents assembled from:
-- A **report template** (layout, branding, section structure)
-- **Data bindings** — which sheet outputs, assumptions, or computed values fill each section
-- **Charts** — generated from sheet data, embedded as images
-- **Static content** — cover pages, disclaimers, methodology notes
-
-Report templates are versioned independently of spreadsheet templates.
+Excel is **just the calculation engine**. Source of truth lives in the Firestore metadata + Drive files versioned alongside it.
 
 ---
 
-## Technical architecture
+## 2. The three-way model
 
-### Stack
+```
+                    AssumptionPack
+                  (the numbers user wants to model)
+                          │
+                          ▼ overlay I_ tabs
+                        Model
+                  (the .xlsx with calculation logic)
+                          │
+                          ▼ extract O_ tabs
+                    OutputTemplate
+                  (the report layout / format)
+                          │
+                          ▼ recalc + render
+                       Output
+                  (the .xlsx / PDF / .docx / Google Doc artifact)
+```
 
-| Layer | Technology | Notes |
+Composition happens **per Run**, not at design time. An AssumptionPack is not bound to any particular Model. A Model is not bound to any particular OutputTemplate. The validator decides at Run time whether a `(pack, model, template)` triple is compatible.
+
+See [docs/architecture/three_way_composition.md](docs/architecture/three_way_composition.md) for the full pattern.
+
+---
+
+## 3. Tab-prefix contract (the engine convention)
+
+Every `.xlsx` file MastekoFM touches obeys these case-sensitive prefixes:
+
+| Prefix | Meaning | Used on |
 |---|---|---|
-| Frontend | React 19, TypeScript, Vite, Tailwind | Firebase Hosting |
-| Backend API | Python 3.12, FastAPI, Cloud Run | Stateless, horizontally scalable |
-| Auth | Firebase Auth | Google Sign-In, email/password |
-| App database | Firestore | Projects, users, orgs, DAG config, assumptions |
-| Real-time sync | Firestore onSnapshot | Live updates to all connected users |
-| File storage | Google Drive API | Excel templates, uploaded files, generated reports |
-| Analytics | BigQuery | Usage metrics, calculation audit logs |
-| Secrets | GCP Secret Manager | API keys, tokens |
-| CI/CD | Cloud Build | pytest → Docker → deploy |
-| PDF generation | WeasyPrint | HTML→PDF with branded templates |
-| Excel engine | openpyxl + LibreOffice headless | openpyxl for I/O, LibreOffice for calculation |
-| Task queue | Cloud Tasks | Async recalculation, report generation |
+| `I_*` | **I**nput tab — filled by an AssumptionPack | Model, AssumptionPack |
+| `O_*` | **O**utput tab — published by a Model for downstream use | Model |
+| `M_*` | **M**odel-output tab — filled by a Model's `O_*` values | OutputTemplate only |
+| (other) | Calculation tab — formulas only, never touched | Model, OutputTemplate |
 
-### GCP project
+Case sensitivity is strict — `i_Cap Table` is a calc tab, NOT an input.
 
-- **Project ID**: `masteko-fm` (new GCP project, separate from masteko-dwh)
-- **Region**: `northamerica-northeast1` (Montréal)
-- Follows the same environment pattern as MastekoDWH: LOCAL / DEV / PROD
-- Own Cloud Run service, Firebase Hosting sites, Firestore database, BigQuery dataset
+The full contract — naming, what's allowed, what to avoid — lives in [docs/architecture/tab_prefix_contract.md](docs/architecture/tab_prefix_contract.md).
 
-### Repository structure
+---
+
+## 4. Run pipeline
+
+Two-stage overlay-and-recalc, driven by the same `excel_template_engine.overlay_tab` primitive at each stage:
+
+```
+Stage 1 (Model)
+  Read Model template .xlsx
+  Overlay AssumptionPack's I_* tabs onto Model's I_* tabs
+  LibreOffice recalc
+  Read Model.O_* tab values
+
+Stage 2 (Output)
+  Read OutputTemplate .xlsx
+  For each M_<name> tab in OutputTemplate, overlay matching O_<name> values from stage 1
+  LibreOffice recalc
+  Save OutputTemplate workbook → final artifact
+```
+
+Full algorithm with code references in [docs/architecture/run_pipeline.md](docs/architecture/run_pipeline.md).
+
+---
+
+## 5. Entities & data model
+
+### Firestore collections (post-Sprint-B cleanup)
+
+```
+{prefix}models/{modelId}                  -- versioned .xlsx with I_/O_/calc tabs
+{prefix}output_templates/{templateId}     -- versioned .xlsx (M_/calc/O_) or PDF/Word/Sheets template
+{prefix}projects/{projectId}              -- thin org scope: members, drive folder, defaults
+{prefix}projects/{pid}/assumption_packs/  -- versioned .xlsx (I_ tabs only) per project
+{prefix}runs/{runId}                      -- top-level: every run across all projects
+```
+
+### Per-entity required fields
+
+```
+Model {
+  id, name, code_name, description, version, status
+  storage_kind: "drive_xlsx" (only)
+  drive_file_id
+  input_tabs:  [tab names of I_*]      // declarative schema
+  output_tabs: [tab names of O_*]
+  calc_tabs:   [tab names of other]
+  size_bytes, uploaded_by, created_at, updated_at
+}
+
+OutputTemplate {
+  id, name, code_name, description, version, status
+  format: "xlsx"  // future: "pdf" | "docx" | "google_doc"
+  storage_kind: "drive_xlsx"
+  drive_file_id
+  m_tabs:      [tab names of M_*]      // model outputs this template needs
+  output_tabs: [tab names of O_*]      // final artifact-shaping tabs
+  calc_tabs:   [tab names of other]
+}
+
+Project {
+  id, name, code_name, description
+  drive_folders: { project, inputs, outputs, models?, output_templates? }
+  default_model_id?      // optional: default to pre-select in Run modal
+  members: [{ uid, role, added_at }]   // owner | editor | viewer
+  status: "active" | "archived"
+}
+
+AssumptionPack {
+  id, project_id, name, code_name, description, version
+  storage_kind: "drive_xlsx"
+  drive_file_id
+  input_tabs: [tab names of I_*]
+  status: "active" | "archived"
+}
+
+Run {
+  id, project_id
+  assumption_pack_id, assumption_pack_version
+  model_id, model_version
+  output_template_id, output_template_version
+  status: "pending" | "running" | "completed" | "failed"
+  started_at, completed_at, duration_ms
+  output_drive_file_id, output_download_url
+  warnings: [...], error?, retry_of?
+  triggered_by: <uid>
+}
+```
+
+### Composition validity
+
+A Run is launchable iff:
+
+1. AssumptionPack's `input_tabs` ⊇ Model's `input_tabs` (every Model input is provided)
+2. OutputTemplate's `m_tabs` ⊆ {strip(`O_`, t) for t in Model's `output_tabs`} (every M_ tab has a matching Model output)
+
+The validator service is `services/run_validator.py`.
+
+---
+
+## 6. Tech stack
+
+| Layer | Choice | Why |
+|---|---|---|
+| Backend API | Python 3.12 + FastAPI | Existing, fast, well-typed |
+| Workers (async runs) | Same image, separate Cloud Run service | Single deploy, isolated CPU |
+| Excel engine | **openpyxl** (read/write) + **LibreOffice headless** (recalc) | Cloud-Run friendly, no Excel license, full formula compat (XIRR/XNPV/IRR/etc.) |
+| Auth | Firebase Auth (Google Sign-In) | Already in production |
+| Database | Firestore | Existing, good fit, real-time listeners free |
+| File storage | Google Drive (`.xlsx` files) + GCS (output blobs) | Drive for human editing in Sheets Office mode; GCS for stable download URLs |
+| Job queue | Cloud Tasks | GCP-native, no extra infra |
+| Frontend | React 19 + TypeScript + Vite + Tailwind | Existing |
+| Hosting | Firebase Hosting | Existing |
+| CI/CD | Cloud Build → Cloud Run + Firebase | Existing, working |
+| Output renderers | xlsx (built-in), WeasyPrint (PDF), python-docx (Word), Google Docs API | Each format = one renderer module |
+
+### Push-back from earlier draft spec
+
+The original specification suggested xlwings, PostgreSQL, and Redis. We keep:
+- **LibreOffice over xlwings** — cloud-friendly, no Excel license, no Windows VMs
+- **Firestore over Postgres** — existing, scales, real-time listeners free
+- **Cloud Tasks over Redis** — managed, no infra, integrates with Cloud Run
+
+Decision rationale: [docs/REDESIGN_2026_04.md § "Where I'd push back"](docs/REDESIGN_2026_04.md).
+
+---
+
+## 7. Storage strategy
+
+```
+Drive layout:
+  <user-picked-root>/MastekoFM/
+    Models/
+      <model_code>_v<N>.xlsx
+    OutputTemplates/
+      <template_code>_v<N>.xlsx
+    Projects/
+      <project_code>/
+        Inputs/
+          <pack_code>.xlsx
+        Outputs/
+          <timestamp>_<run_id>.xlsx
+
+GCS layout (masteko-fm-outputs bucket, public read):
+  runs/<run_id>/<timestamp>_<output_filename>.xlsx
+```
+
+- **Drive holds canonical files** — Models, OutputTemplates, AssumptionPacks. Edited via Sheets Office mode.
+- **GCS holds output mirrors** — stable HTTPS URLs for downloads and link sharing.
+- **Drive revisions are the version history** — we record `drive_revision_id` on every Run for full reproducibility.
+
+---
+
+## 8. Async run lifecycle
+
+```
+1. POST /api/runs    body: { project_id, model_id, pack_id, output_template_id }
+                     → 202 Accepted, returns { run_id }
+                     → creates Firestore doc { status: pending }
+                     → enqueues to Cloud Tasks queue mfm-runs
+
+2. Cloud Tasks delivers task to worker Cloud Run service
+                     → updates run.status = running
+                     → executes Stage 1 + Stage 2 (see Run Pipeline)
+                     → uploads output to Drive + GCS
+                     → updates run.status = completed (or failed + error)
+
+3. Frontend polls GET /api/runs/{run_id} OR uses Firestore onSnapshot for live updates
+
+4. Failed runs retry automatically (Cloud Tasks exponential backoff, max 3 attempts).
+   Final failure leaves status: failed with error message.
+   User can manually retry via POST /api/runs/{run_id}/retry → creates a new run with same composition.
+```
+
+---
+
+## 9. Project structure
 
 ```
 MastekoFM/
-├── CLAUDE.md                    # Development rules and policies
-├── ARCHITECTURE.md              # This document
-├── BACKLOG.md                   # Product backlog
-├── SESSION_HANDOFF.md           # Context for Claude Code sessions
-├── Makefile                     # Local dev commands
-├── docker-compose.yml           # Local dev stack
-├── cloudbuild.yaml              # CI/CD pipeline
-├── deploy-dev.sh                # DEV deployment
-├── deploy-prod.sh               # PROD deployment
+├── README.md                           — top-level pitch
+├── ARCHITECTURE.md                     — this file
+├── BACKLOG.md                          — sprints + stories
+├── CLAUDE.md                           — development rules (mandatory)
+├── LESSONS_LEARNED.md                  — bugs, gotchas, hard-won lessons
+├── SESSION_HANDOFF.md                  — current state for the next dev/agent
+├── VERSION                             — MAJOR.NNN, auto-bumped on DEV deploy
 │
 ├── backend/
-│   ├── Dockerfile
+│   ├── Dockerfile                      — multi-stage, includes LibreOffice
 │   ├── requirements.txt
-│   ├── pytest.ini
-│   ├── app/
-│   │   ├── main.py              # FastAPI app
-│   │   ├── config.py            # Settings, env, secrets
-│   │   ├── middleware/
-│   │   │   └── auth.py          # Firebase Auth (bypass in DEV)
-│   │   ├── models/              # Pydantic schemas
-│   │   │   ├── project.py
-│   │   │   ├── datasource.py
-│   │   │   ├── assumption.py
-│   │   │   ├── spreadsheet.py
-│   │   │   ├── dag.py
-│   │   │   ├── report.py
-│   │   │   └── user.py
-│   │   ├── routers/
-│   │   │   ├── health.py
-│   │   │   ├── auth.py
-│   │   │   ├── projects.py
-│   │   │   ├── datasources.py
-│   │   │   ├── assumptions.py
-│   │   │   ├── spreadsheets.py
-│   │   │   ├── dag.py
-│   │   │   └── reports.py
-│   │   ├── services/
-│   │   │   ├── datasource_sync.py    # Airtable, CSV, Excel ingestion
-│   │   │   ├── assumption_engine.py  # Mapping, validation, versioning
-│   │   │   ├── excel_engine.py       # openpyxl: inject, calculate, extract
-│   │   │   ├── dag_executor.py       # Topological sort + cascade recalc
-│   │   │   ├── report_generator.py   # HTML→PDF assembly
-│   │   │   └── drive_service.py      # Google Drive file operations
-│   │   └── connectors/
-│   │       ├── airtable.py
-│   │       ├── csv_connector.py
-│   │       ├── excel_connector.py
-│   │       ├── gsheets_connector.py
-│   │       └── api_connector.py
-│   └── tests/
-│       ├── test_excel_engine.py
-│       ├── test_dag_executor.py
-│       ├── test_assumption_engine.py
-│       └── test_datasource_sync.py
+│   └── app/
+│       ├── main.py                     — FastAPI app + router registration
+│       ├── config.py                   — settings, Firestore client
+│       ├── middleware/
+│       │   └── auth.py                 — Firebase Auth + DEV bypass
+│       ├── models/                     — Pydantic schemas (NO business logic)
+│       │   ├── model.py                — Model entity (ex-ExcelTemplate)
+│       │   ├── output_template.py      — OutputTemplate entity (NEW)
+│       │   ├── project.py              — Project entity (slim)
+│       │   ├── assumption_pack.py      — AssumptionPack entity (ex-Scenario)
+│       │   ├── run.py                  — Run entity (top-level)
+│       │   └── user.py
+│       ├── routers/                    — HTTP endpoints, thin
+│       │   ├── models.py               — Model CRUD
+│       │   ├── output_templates.py     — OutputTemplate CRUD
+│       │   ├── projects.py             — Project CRUD + member mgmt
+│       │   ├── assumption_packs.py     — AssumptionPack CRUD + Edit-in-Sheets
+│       │   ├── runs.py                 — POST/GET runs, retry, list per project
+│       │   ├── seed.py                 — /api/seed/helloworld, /api/seed/campus-adele
+│       │   ├── auth.py
+│       │   ├── health.py
+│       │   └── settings.py             — workspace defaults, drive folder
+│       ├── services/                   — business logic
+│       │   ├── excel_template_engine.py — classify/extract/overlay/validate
+│       │   ├── excel_engine.py         — LibreOffice recalc (low-level)
+│       │   ├── run_validator.py        — three-way compatibility checker (NEW)
+│       │   ├── run_executor.py         — two-stage Stage1+Stage2 pipeline (NEW)
+│       │   ├── pack_store.py           — Drive AssumptionPack adapter (was scenario_store)
+│       │   ├── output_renderers/       — one renderer per output format (NEW)
+│       │   │   ├── xlsx_renderer.py
+│       │   │   ├── pdf_renderer.py     — Sprint D
+│       │   │   ├── docx_renderer.py    — Sprint H
+│       │   │   └── gdoc_renderer.py    — Sprint H
+│       │   ├── storage_service.py      — GCS helper
+│       │   └── drive_service.py        — Google Drive ops
+│       └── workers/                    — async processors (Sprint C)
+│           └── run_worker.py           — Cloud Tasks handler for /tasks/run/{id}
 │
 ├── frontend/
 │   ├── package.json
 │   ├── vite.config.ts
 │   ├── tailwind.config.ts
-│   ├── src/
-│   │   ├── App.tsx
-│   │   ├── pages/
-│   │   │   ├── Dashboard.tsx          # Project list
-│   │   │   ├── ProjectView.tsx        # Single project workspace
-│   │   │   ├── DAGEditor.tsx          # Visual DAG wiring
-│   │   │   ├── AssumptionsTable.tsx   # Editable assumptions grid
-│   │   │   ├── SpreadsheetView.tsx    # Sheet preview + input/output mapping
-│   │   │   ├── DataSourceConfig.tsx   # Source connection setup
-│   │   │   └── ReportBuilder.tsx      # Report template + preview
-│   │   ├── components/
-│   │   │   ├── dag/                   # DAG visualization (React Flow)
-│   │   │   ├── tables/               # Data grids (TanStack Table)
-│   │   │   └── charts/               # Recharts components
-│   │   └── services/
-│   │       └── api.ts                 # Backend API client
-│   └── public/
+│   └── src/
+│       ├── App.tsx                     — Router
+│       ├── pages/
+│       │   ├── ProjectsPage.tsx        — list of Projects
+│       │   ├── ProjectView.tsx         — single project + AssumptionPacks + Runs + "+ New Run" modal
+│       │   ├── ModelsPage.tsx          — list/upload Models
+│       │   ├── OutputTemplatesPage.tsx — list/upload OutputTemplates
+│       │   ├── RunsPage.tsx            — global runs dashboard (Sprint C)
+│       │   ├── RunDetailPage.tsx       — single run + outputs + retry
+│       │   ├── SettingsPage.tsx
+│       │   └── Login.tsx
+│       ├── components/
+│       │   ├── Layout.tsx
+│       │   ├── ProtectedRoute.tsx
+│       │   ├── NewRunModal.tsx         — the 3-dropdown composer (NEW)
+│       │   └── CompatibilityBadge.tsx  — green/red indicator (NEW)
+│       ├── services/
+│       │   ├── api.ts                  — fetch wrapper, token-wait, X-MFM-Drive-Token
+│       │   └── firebase.ts
+│       └── contexts/
+│           └── AuthContext.tsx
 │
-├── templates/
-│   ├── spreadsheets/                  # Versioned .xlsx templates
-│   │   ├── revenue_model_v1.xlsx
-│   │   ├── operating_expenses_v1.xlsx
-│   │   └── returns_analysis_v1.xlsx
-│   └── reports/                       # Report HTML/CSS templates
-│       ├── investor_summary/
-│       └── lender_package/
+├── seed/                               — committed seed files (Sprint B)
+│   ├── helloworld/
+│   │   ├── helloworld_model.xlsx       — minimal Model (I_Numbers, O_Results)
+│   │   ├── helloworld_inputs.xlsx      — minimal AssumptionPack
+│   │   ├── helloworld_report.xlsx      — minimal OutputTemplate (M_Results, O_Report)
+│   │   └── README.md                   — explains the file structure
+│   └── campus_adele/
+│       ├── campus_adele_model.xlsx     — the 15-tab construction-to-perm Model
+│       ├── campus_adele_base_pack.xlsx — Base Case AssumptionPack
+│       ├── campus_adele_summary.xlsx   — investor summary OutputTemplate
+│       └── README.md
 │
-└── skills/                            # Claude Code skills
-    ├── SKILL_excel_engine.md
-    ├── SKILL_dag_execution.md
-    ├── SKILL_datasource_connectors.md
-    └── SKILL_report_generation.md
+├── tests/
+│   ├── conftest.py
+│   ├── fixtures/
+│   │   ├── helloworld_model.xlsx       — engine regression fixture
+│   │   ├── helloworld_inputs.xlsx
+│   │   ├── helloworld_report.xlsx
+│   │   └── campus_adele.xlsx
+│   ├── test_excel_template_engine.py
+│   ├── test_run_validator.py           — Sprint A
+│   ├── test_run_executor.py            — Sprint A
+│   ├── test_pack_store.py              — renamed from test_scenario_store
+│   ├── test_models_router.py
+│   ├── test_output_templates_router.py — Sprint A
+│   ├── test_runs_router.py             — Sprint A
+│   ├── test_projects_router.py
+│   ├── test_auth.py
+│   └── test_health.py
+│
+├── docs/
+│   ├── REDESIGN_2026_04.md             — strategic context for the redesign
+│   ├── architecture/
+│   │   ├── three_way_composition.md
+│   │   ├── tab_prefix_contract.md
+│   │   └── run_pipeline.md
+│   └── sprints/
+│       ├── SPRINT_A_helloworld_slice.md
+│       ├── SPRINT_B_cleanup_and_migration.md
+│       ├── SPRINT_C_async_runs.md
+│       ├── SPRINT_D_pdf_outputs.md
+│       ├── SPRINT_E_multi_user.md
+│       ├── SPRINT_F_json_assumptions.md
+│       ├── SPRINT_G_sensitivity_sweeps.md
+│       └── SPRINT_H_word_googledocs.md
+│
+├── firebase.json                       — hosting config (no-cache index, immutable assets)
+├── cloudbuild.yaml                     — Docker build + deploy
+├── deploy-dev.sh                       — VERSION bump + Cloud Build + Firebase deploy
+├── deploy-prod.sh                      — promote DEV image to prod (no version bump)
+└── pyproject.toml                      — Python deps + ruff + pytest config
 ```
 
 ---
 
-## Data model (Firestore)
+## 10. Environments
 
-### Collection: `projects`
-```
-projects/{projectId}
-  name: string
-  owner_uid: string
-  org_id: string
-  created_at: timestamp
-  updated_at: timestamp
-  version: number
-  status: "active" | "archived"
-  collaborators: [{uid, role, added_at}]
-```
+| Environment | Backend | Frontend | Firestore prefix | Auth |
+|---|---|---|---|---|
+| LOCAL | localhost:8080 | localhost:5173 | `dev_` | DEV bypass |
+| DEV | masteko-fm-api-dev (Cloud Run) | dev-masteko-fm.web.app | `dev_` | Firebase Auth or DEV bypass |
+| PROD | masteko-fm-api-prod (Cloud Run) | masteko-fm.web.app | `prod_` | Firebase Auth only |
 
-### Collection: `datasources`
-```
-projects/{projectId}/datasources/{sourceId}
-  name: string
-  type: "airtable" | "excel" | "csv" | "gsheets" | "manual" | "api"
-  config: {
-    // airtable: {base_id, table_name, api_key_secret}
-    // excel: {drive_file_id, sheet_name}
-    // csv: {drive_file_id}
-    // gsheets: {spreadsheet_id, range}
-    // api: {url, method, headers, auth_type}
-  }
-  field_mappings: [{source_field, assumption_key, transform?}]
-  last_synced_at: timestamp
-  sync_status: "idle" | "syncing" | "error"
-  sync_error: string?
-```
-
-### Collection: `assumptions`
-```
-projects/{projectId}/assumptions/{assumptionId}
-  key: string               # unique within project
-  display_name: string
-  category: string           # "Revenue", "Construction", etc.
-  type: "number" | "percentage" | "currency" | "date" | "text" | "boolean"
-  value: any                 # current resolved value
-  source_id: string?         # datasource that provided it
-  is_overridden: boolean
-  override_value: any?
-  override_by: string?       # uid
-  override_at: timestamp?
-  version: number
-  created_at: timestamp
-  updated_at: timestamp
-```
-
-### Subcollection: `assumption_history`
-```
-projects/{projectId}/assumptions/{assumptionId}/history/{historyId}
-  version: number
-  value: any
-  previous_value: any
-  changed_by: string         # uid or "system"
-  changed_at: timestamp
-  reason: string?            # "Manual override" | "Airtable sync" | etc.
-```
-
-### Collection: `spreadsheets`
-```
-projects/{projectId}/spreadsheets/{sheetId}
-  name: string
-  template_id: string        # reference to template registry
-  template_version: number
-  drive_file_id: string      # the actual .xlsx in Drive
-  inputs: [{assumption_key, cell_reference}]
-  outputs: [{cell_reference, output_key, label}]
-  position: {x, y}          # for DAG visual layout
-  last_calculated_at: timestamp
-  calculation_status: "idle" | "calculating" | "error"
-  output_values: {key: value} # cached output values
-```
-
-### Collection: `dag_edges`
-```
-projects/{projectId}/dag_edges/{edgeId}
-  source_sheet_id: string
-  source_output_key: string
-  target_sheet_id: string
-  target_assumption_key: string  # maps to an assumption that gets overridden
-  created_at: timestamp
-```
-
-### Collection: `reports`
-```
-projects/{projectId}/reports/{reportId}
-  name: string
-  template_id: string
-  template_version: number
-  bindings: [{section_id, data_type, data_ref}]
-  generated_at: timestamp?
-  drive_file_id: string?     # generated PDF in Drive
-  status: "draft" | "generating" | "ready" | "error"
-```
-
-### Collection: `templates` (global, not per-project)
-```
-templates/{templateId}
-  name: string
-  type: "spreadsheet" | "report"
-  description: string
-  version: number
-  drive_file_id: string       # the template .xlsx or HTML
-  inputs_schema: [{key, type, label, required, default?}]
-  outputs_schema: [{key, type, label, cell_reference}]
-  created_by: string
-  created_at: timestamp
-  changelog: [{version, date, notes}]
-```
+DEV is recoverable; PROD is not. See CLAUDE.md "Standing Authorizations" for the full asymmetry.
 
 ---
 
-## Key workflows
+## 11. Compatibility-validation rules (canonical)
 
-### 1. Create a project
-1. User creates project → Firestore doc created
-2. Google Drive folder created: `MastekoFM/{project_name}/`
-3. Subfolders: `sources/`, `spreadsheets/`, `reports/`
-4. Default assumptions categories seeded
+```python
+def validate_run(model: Model, pack: AssumptionPack, output_template: OutputTemplate) -> list[str]:
+    errors = []
+    
+    # Rule 1: AssumptionPack must provide every Model input
+    missing_inputs = set(model.input_tabs) - set(pack.input_tabs)
+    if missing_inputs:
+        errors.append(f"AssumptionPack missing required input tabs: {sorted(missing_inputs)}")
+    
+    # Rule 2: AssumptionPack may not contain O_ or M_ tabs
+    pack_classes = classify_bytes(pack.bytes)
+    if pack_classes["output_tabs"] or pack_classes.get("m_tabs"):
+        errors.append("AssumptionPack must contain only I_ tabs")
+    
+    # Rule 3: Every M_<name> in OutputTemplate must match an O_<name> in Model
+    model_output_basenames = {tab.removeprefix("O_") for tab in model.output_tabs}
+    template_m_basenames = {tab.removeprefix("M_") for tab in output_template.m_tabs}
+    missing_outputs = template_m_basenames - model_output_basenames
+    if missing_outputs:
+        errors.append(f"OutputTemplate requires Model outputs not present: {sorted(missing_outputs)}")
+    
+    return errors
+```
 
-### 2. Connect a data source
-1. User selects source type (Airtable, Excel, CSV, etc.)
-2. Provides connection config (API key, file upload, etc.)
-3. System fetches available fields
-4. User maps source fields → assumption keys
-5. Initial sync runs → assumption values populated
-6. Subsequent syncs update values, creating history entries
-
-### 3. Add a spreadsheet to the DAG
-1. User selects a spreadsheet template (or uploads custom .xlsx)
-2. Template is registered: inputs and outputs declared via named ranges
-3. Sheet is added as a node in the project DAG
-4. User maps: which assumptions feed into which input cells
-5. User maps: which output cells are published as named outputs
-6. Sheet positioned in DAG canvas
-
-### 4. Wire sheets together
-1. User draws an edge from Sheet A's output to Sheet B's input
-2. System validates: no cycles, type compatibility
-3. Edge stored in `dag_edges`
-4. When Sheet A recalculates, its outputs become Sheet B's inputs
-
-### 5. Recalculate the DAG
-1. Triggered by: assumption change, data source sync, manual trigger
-2. DAG executor performs topological sort
-3. For each sheet in order:
-   a. Collect inputs (from assumptions + upstream outputs)
-   b. Open .xlsx template
-   c. Inject values into named input cells
-   d. Calculate (openpyxl formula evaluator or LibreOffice)
-   e. Extract output values from named output cells
-   f. Cache outputs in Firestore
-   g. Publish outputs as inputs for downstream sheets
-4. Calculation status tracked per sheet
-5. Errors halt downstream propagation with clear error messages
-
-### 6. Generate a report
-1. User selects report template
-2. Binds sections to data: assumption values, sheet outputs, computed metrics
-3. System generates HTML from template + data
-4. Converts to PDF (WeasyPrint)
-5. Stores in Google Drive
-6. User can download or share link
+UI: dropdowns in the New Run modal show only compatible options. Submit button disabled if any errors.
 
 ---
 
-## Versioning strategy
+## 12. Versioning & reproducibility
 
-### Three things are versioned:
+Each entity has a `version` integer. Each artifact has a `drive_revision_id` from Drive's built-in version history.
 
-1. **Templates** (spreadsheet + report)
-   - Stored in GitHub under `templates/`
-   - Each template has a version number
-   - Projects reference a specific template version
-   - Upgrading a project to a new template version is an explicit action
+Every Run records:
+- `model_id`, `model_version`, `model_drive_revision_id`
+- `assumption_pack_id`, `assumption_pack_version`, `pack_drive_revision_id`
+- `output_template_id`, `output_template_version`, `output_template_drive_revision_id`
+- `output_drive_file_id`, `output_drive_revision_id`
 
-2. **Assumptions**
-   - Every value change creates a history entry
-   - Full audit trail: who, when, what, why
-   - Point-in-time reconstruction: "what was the model on March 15?"
-
-3. **Project snapshots**
-   - A snapshot captures: all assumption values + all sheet outputs + DAG config
-   - Snapshots are named (e.g., "Q1 2026 Base Case", "Sensitivity: +2% rates")
-   - Snapshots enable scenario comparison
-
-### GitHub versioning
-- All application code versioned in `github.com/mkoran/MastekoFM`
-- Template .xlsx files versioned in the repo under `templates/`
-- CLAUDE.md, skills, and backlog in the repo root
-- Follows same branching strategy as MastekoDWH: `main` → `dev` → feature branches
+Reproducibility test: given a Run record, fetch all three input files at the recorded revisions, re-execute the pipeline, byte-compare the output. Should produce identical bytes (modulo timestamps in cell metadata, which the engine zeros out).
 
 ---
 
-## Excel vs Google Sheets decision
+## 13. Standing decisions
 
-**Recommendation: Excel (.xlsx) as the primary format.**
+Pulled together so a new dev sees them in one place. Full context in [docs/REDESIGN_2026_04.md](docs/REDESIGN_2026_04.md).
 
-| Factor | Excel (.xlsx) | Google Sheets |
+| # | Decision | Why |
 |---|---|---|
-| Offline editing | Full support | Requires internet |
-| Formula complexity | Full Excel formula set | Subset + Apps Script |
-| File portability | Universal | Requires export |
-| Programmatic access | openpyxl (mature, fast) | Sheets API (quota limits) |
-| Template versioning | Git-friendly (binary but diffable with tools) | Version history in Drive |
-| User familiarity | Industry standard for finance | Less common in finance |
-| Calculation engine | Can use LibreOffice headless | Must use Sheets API |
-| Storage | Google Drive (or any storage) | Must be in Google Drive |
-| Multi-user editing | Not real-time | Real-time collaboration |
-
-Excel wins on portability, formula support, and finance-industry familiarity. The platform stores .xlsx files in Google Drive for accessibility, but the calculation engine operates on the files programmatically — users never need to open Google Drive directly unless they want to.
-
----
-
-## Sprint plan
-
-### Sprint 0 — Infrastructure skeleton
-- GCP project `masteko-fm` provisioned
-- Firebase project + Auth configured
-- Cloud Run service deployed (health check only)
-- Firebase Hosting DEV + PROD sites
-- Firestore database created
-- BigQuery dataset created
-- Google Drive root folder created
-- GitHub repo initialized with full structure
-- CLAUDE.md, Makefile, docker-compose, deploy scripts
-- CI/CD pipeline (Cloud Build)
-- Local dev environment working
-
-### Sprint 1 — Core data model + project CRUD
-- User registration + auth flow
-- Project CRUD (create, list, view, archive)
-- Google Drive folder auto-creation per project
-- Assumptions CRUD with validation and history
-- Assumptions table UI (editable data grid)
-- Categories and grouping
-
-### Sprint 2 — Data source connectors
-- CSV connector (upload + parse + map)
-- Excel connector (upload + parse + map)
-- Airtable connector (API + field discovery + map)
-- Data source configuration UI
-- Field mapping UI (source field → assumption key)
-- Sync trigger + status display
-
-### Sprint 3 — Excel engine + DAG
-- Template registry (upload .xlsx, declare inputs/outputs via named ranges)
-- Excel engine: inject inputs → calculate → extract outputs
-- DAG data model (nodes + edges)
-- DAG executor (topological sort + cascade recalculation)
-- DAG editor UI (React Flow — drag nodes, draw edges)
-- Spreadsheet preview UI (read-only grid showing current values)
-
-### Sprint 4 — Wiring and recalculation
-- Output→input mapping (sheet outputs become downstream inputs)
-- Full DAG recalculation on assumption change
-- Calculation status tracking and error handling
-- Assumption override (manual value overrides source value)
-- Assumption version history UI (timeline view)
-
-### Sprint 5 — Report generation
-- Report template system (HTML/CSS templates with data bindings)
-- Data binding UI (map sections to sheet outputs / assumptions)
-- Chart generation (Recharts → PNG → embed in PDF)
-- PDF generation (WeasyPrint or Puppeteer)
-- Report storage in Google Drive
-- Report list + download UI
-
-### Sprint 6 — Versioning and scenarios
-- Project snapshots (freeze all values at a point in time)
-- Snapshot comparison (side-by-side diff of two scenarios)
-- Template versioning (upgrade project to new template version)
-- Assumption diff view (what changed between snapshots)
-
-### Sprint 7 — Analysis tools
-- Sensitivity analysis (vary one input, chart the output impact)
-- Scenario manager (named sets of assumption overrides)
-- Dashboard widgets (KPI cards, trend charts)
-- Export: full model as a single .xlsx workbook
-
-### Sprint 8+ — Multi-tenant SaaS features
-- Organization / team management
-- Role-based access control (owner, editor, viewer)
-- Sharing and collaboration
-- Billing integration
-- API access for external integrations
-- Google Sheets connector
-- Custom API endpoint connector
-
----
-
-## Skills for Claude Code
-
-The following skills should be created in the repo under `skills/` and referenced in CLAUDE.md:
-
-### SKILL_excel_engine.md
-Best practices for working with openpyxl: reading/writing named ranges, formula evaluation strategies, handling currency/percentage formatting, error handling for circular references, template validation.
-
-### SKILL_dag_execution.md
-How to implement and test DAG operations: topological sort, cycle detection, cascade recalculation, error propagation, partial recalculation (only dirty nodes).
-
-### SKILL_datasource_connectors.md
-Patterns for building data source connectors: field discovery, type inference, mapping normalization, sync scheduling, error recovery, credential management via Secret Manager.
-
-### SKILL_report_generation.md
-PDF report generation patterns: HTML template design, data binding, chart embedding, WeasyPrint configuration, branded template structure, page numbering, table of contents.
-
----
-
-## CLAUDE.md additions
-
-The project CLAUDE.md should include all rules from MastekoDWH plus:
-
-```markdown
-## MastekoFM-specific rules
-
-### Excel files
-- All .xlsx operations use openpyxl
-- Named ranges are the ONLY interface between the platform and spreadsheets
-- Never hardcode cell references (A1, B2) — always use named ranges
-- Template validation: every template must declare its inputs and outputs
-- Formula calculation: prefer openpyxl's formula evaluator; fall back to LibreOffice headless
-
-### DAG operations
-- Always validate for cycles before adding edges
-- Recalculation uses topological sort — never recursive
-- Failed nodes do not halt the entire DAG — downstream nodes are marked "stale"
-- All recalculations are logged to BigQuery with timing data
-
-### Assumptions
-- Every value change creates a history entry — no exceptions
-- Override values are stored separately from source values
-- Type validation runs before storage (e.g., percentage must be 0-1 or 0-100)
-
-### Reports
-- Reports are generated asynchronously via Cloud Tasks
-- PDF generation must complete within 60 seconds
-- All generated files go to Google Drive, never local disk in production
-```
-
----
-
-## Design decisions (resolved 2026-04-14)
-
-### 1. Multi-user editing → Checkout model
-
-Users must **check out** a project (or specific sheets/assumptions) before editing. While checked out, other users see the project in read-only mode with a banner showing who has it checked out. This prevents conflicts without the complexity of CRDTs or real-time merge.
-
-**Checkout rules:**
-- Checkout is per-project (not per-sheet) in v1. Per-sheet checkout is a future refinement.
-- Checkout has an automatic expiry (configurable, default 2 hours) to prevent abandoned locks.
-- Owner can force-release another user's checkout.
-- Checkout is recorded in the audit trail (who, when, duration).
-- Read access is always available — only writes require checkout.
-
-**Data model addition:**
-```
-projects/{projectId}
-  checkout: {
-    user_uid: string | null
-    user_name: string | null
-    checked_out_at: timestamp | null
-    expires_at: timestamp | null
-  }
-```
-
-**API additions:**
-- `POST /api/projects/{id}/checkout` — acquire checkout
-- `POST /api/projects/{id}/checkin` — release checkout
-- `POST /api/projects/{id}/force-release` — owner only, force-release
-- All write endpoints return 423 Locked if project is checked out by another user
-
-**Frontend:**
-- Checkout banner at top of project workspace
-- "Check out to edit" button when viewing read-only
-- Auto-checkin prompt after period of inactivity
-- Visual indicator in project list showing checked-out projects
-
-### 2. Calculation engine → LibreOffice headless (always)
-
-All spreadsheet calculations run through **LibreOffice headless**. This is the most reliable methodology — it handles every Excel formula including XIRR, XNPV, RATE, IRR, MIRR, and all financial functions without gaps.
-
-**Architecture:**
-- LibreOffice is installed in the backend Docker image
-- Calculation flow: inject values via openpyxl → save temp .xlsx → open in LibreOffice headless → recalculate → save → read results via openpyxl
-- openpyxl is used only for reading/writing cell values and named ranges, never for formula evaluation
-- LibreOffice runs in a sandboxed subprocess with timeout (30 seconds max)
-- Calculation results are cached — recalculation only happens when inputs change
-
-**Docker image addition:**
-```dockerfile
-RUN apt-get update && apt-get install -y libreoffice-calc-nogui --no-install-recommends
-```
-
-**Performance considerations:**
-- LibreOffice cold start: ~2-3 seconds. Mitigate with Cloud Run min-instances in PROD.
-- For heavy DAGs (10+ sheets), calculations run sequentially per topological order — parallelism is a future optimization.
-- Calculation timing logged to BigQuery for performance monitoring.
-
-### 3. Template marketplace → Backlog (future)
-
-Not in initial release. Added to backlog as Domain 15 for future sprints. Users can create and version their own templates; sharing across organizations comes later.
-
-### 4. Real-time updates → WebSockets via Firestore listeners
-
-Connected users see results update **live** when data sources sync or recalculations complete.
-
-**Implementation:**
-- Frontend uses **Firestore onSnapshot listeners** — no custom WebSocket server needed. Firestore's real-time sync is built-in and handles reconnection, offline, and scaling automatically.
-- Listeners attached to:
-  - `projects/{id}` — checkout status, project metadata
-  - `projects/{id}/assumptions` — assumption value changes
-  - `projects/{id}/spreadsheets` — calculation status and output values
-  - `projects/{id}/dag_edges` — DAG structure changes
-- Backend writes to Firestore after each calculation step → frontend picks up changes within ~1 second
-- Calculation status indicators update in real-time on the DAG canvas (idle → calculating → done/error)
-
-**No additional infrastructure required** — Firestore real-time listeners are part of the existing stack. This is a frontend-only implementation detail.
-
-### 5. In-app spreadsheet editing → Yes, users modify Excel files
-
-Users can **edit spreadsheet files directly** — the platform provides a workflow for modifying the Excel templates that power their model.
-
-**Editing workflow (v1 — download/upload cycle):**
-1. User clicks "Edit spreadsheet" on a DAG node
-2. Platform downloads the current .xlsx (with injected values) to the user's machine
-3. User opens in Excel, modifies formulas/structure
-4. User re-uploads the modified .xlsx
-5. Platform re-discovers named ranges (inputs/outputs may have changed)
-6. User confirms any mapping changes
-7. DAG recalculates with the updated sheet
-
-**Future enhancement (v2 — in-browser editing):**
-- Embed a lightweight spreadsheet component (e.g., Luckysheet, Handsontable, or SheetJS)
-- Allow formula editing without leaving the browser
-- This is a significant feature — added to backlog for Sprint 8+
-
-**Key constraint:** Whether edited locally or in-browser, the platform always validates that:
-- All declared input named ranges still exist
-- All declared output named ranges still exist
-- No circular references within the sheet
-- File size is within limits (10MB max)
-
-**Data model addition — sheet version tracking:**
-```
-projects/{projectId}/spreadsheets/{sheetId}/versions/{versionId}
-  version: number
-  drive_file_id: string          # the .xlsx for this version
-  uploaded_by: string
-  uploaded_at: timestamp
-  inputs_schema: [{key, cell_reference}]
-  outputs_schema: [{key, cell_reference, label}]
-  change_notes: string?
-  is_current: boolean
-```
-
-### 6. Airtable sync → Ingest only (push-back in backlog)
-
-v1 is strictly **one-way ingestion** from Airtable into assumptions. Writing results back to Airtable is added to the backlog as a future connector feature.
-
-**Backlog items added:**
-- DS-015: Airtable write-back connector (push output values to Airtable table)
-- DS-016: Configurable push-back mappings (which outputs → which Airtable fields)
-- DS-017: Push-back trigger options (manual, on recalculation, scheduled)
+| 1 | Excel via LibreOffice headless, NOT xlwings | Cloud Run, no Excel license, full formula compat |
+| 2 | Firestore for metadata, NOT Postgres | Existing, scales, real-time, no migration burden |
+| 3 | Cloud Tasks for queue, NOT Redis | GCP-native, managed, integrates with Cloud Run |
+| 4 | Drive (not GCS) for canonical AssumptionPack storage | Edit-in-Sheets UX, version history, sharing |
+| 5 | GCS for output blob hosting | Stable public URLs |
+| 6 | Tab prefixes are CASE-SENSITIVE | `i_Cap Table` is calc, `I_Cap Table` is input |
+| 7 | Three prefixes: `I_*`, `O_*`, `M_*` (+ calc) | Disambiguates pack inputs vs model outputs vs template inputs |
+| 8 | OutputTemplate is just another `.xlsx` with `M_*` + calc + `O_*` | Reuses 100% of existing engine; no new render path needed for `xlsx` format |
+| 9 | Three-way composition validated per Run | Prevents incompatible runs at submit time |
+| 10 | Async via Cloud Tasks (Sprint C+) | Required for 100+ concurrent + sensitivity sweeps |
+| 11 | Custom header `X-MFM-Drive-Token`, NOT `X-Google-*` | Fastly/Firebase Hosting strips `X-Google-*` headers |
+| 12 | `firebase.json` sets `Cache-Control: no-cache` on index.html, immutable on `/assets/**` | Stale-bundle bug after deploy |
+| 13 | OAuth scope = `drive.file` only (non-sensitive) | No Google verification required, app available to any domain |
+| 14 | OAuth consent: External + In Production | Multi-domain users without test-user list |
+| 15 | API client polls for token up to 3s before request | Fixes Firebase `onAuthStateChanged` race |

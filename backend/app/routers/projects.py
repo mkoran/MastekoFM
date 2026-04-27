@@ -1,214 +1,261 @@
-"""Projects router — CRUD for projects."""
-from datetime import UTC, datetime, timedelta
+"""Projects router — thin org scope.
+
+Sprint B (post-redesign): Project no longer binds to a single Model. AssumptionPacks
+belong to a Project; Runs reference Project + Model + Pack + OutputTemplate
+independently. `default_model_id` is just a UX convenience for the New Run modal.
+"""
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
-from backend.app.models.project import ProjectCreate, ProjectInDB, ProjectResponse, ProjectUpdate
-from backend.app.services.drive_service import create_project_folder
+from backend.app.models.project import (
+    ProjectCreate,
+    ProjectResponse,
+    ProjectSummary,
+    ProjectUpdate,
+)
+from backend.app.services import storage_service
 
-router = APIRouter(prefix="/api/projects", tags=["projects"])
+router = APIRouter(tags=["projects"])
 
 CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
 
 
-def _projects_collection() -> str:
-    return f"{settings.firestore_collection_prefix}projects"
+def _ref():
+    prefix = settings.firestore_collection_prefix
+    return get_firestore_client().collection(f"{prefix}projects")
 
 
-def _project_to_response(doc_id: str, data: dict[str, Any]) -> ProjectResponse:
-    project = ProjectInDB.from_firestore(data)
-    return ProjectResponse(id=doc_id, **project.model_dump(exclude={"drive_folder_id"}))
+def _model_ref():
+    prefix = settings.firestore_collection_prefix
+    return get_firestore_client().collection(f"{prefix}models")
 
 
-@router.post("", response_model=ProjectResponse, status_code=201)
+def _ws_ref():
+    prefix = settings.firestore_collection_prefix
+    return get_firestore_client().collection(f"{prefix}workspaces")
+
+
+def _runs_ref():
+    prefix = settings.firestore_collection_prefix
+    return get_firestore_client().collection(f"{prefix}runs")
+
+
+def _resolve_workspace_id(uid: str, requested_ws_id: str | None) -> tuple[str | None, str | None]:
+    """Sprint G1: pick the workspace_id for a new project.
+
+    If the caller passed one, validate it exists. Otherwise find the user's
+    first workspace (membership). Returns (workspace_id, workspace_name) or
+    (None, None) if no workspace is available — back-compat with old projects.
+    """
+    if requested_ws_id:
+        snap = _ws_ref().document(requested_ws_id).get()
+        if not snap.exists:
+            raise HTTPException(status_code=404, detail=f"Workspace {requested_ws_id} not found")
+        d = snap.to_dict()
+        return requested_ws_id, d.get("name")
+    # Fall back to user's first workspace
+    for doc in _ws_ref().where("members", "array_contains", uid).limit(1).stream():
+        d = doc.to_dict()
+        return doc.id, d.get("name")
+    return None, None
+
+
+def _pack_subref(project_id: str):
+    return _ref().document(project_id).collection("assumption_packs")
+
+
+def _drive_folder_url(folders: dict[str, Any] | None) -> str | None:
+    """Build a Drive web URL from cached folder ids."""
+    if not folders:
+        return None
+    fid = folders.get("project") or folders.get("root") or folders.get("inputs")
+    return f"https://drive.google.com/drive/folders/{fid}" if fid else None
+
+
+def _is_archived(data: dict[str, Any]) -> bool:
+    """Sprint UX-01: archived if explicit boolean OR legacy status string."""
+    return bool(data.get("archived")) or data.get("status") == "archived"
+
+
+def _to_response(doc_id: str, data: dict[str, Any]) -> ProjectResponse:
+    return ProjectResponse(
+        id=doc_id,
+        name=data.get("name", ""),
+        code_name=data.get("code_name", ""),
+        description=data.get("description", ""),
+        workspace_id=data.get("workspace_id"),
+        workspace_name=data.get("workspace_name"),
+        default_model_id=data.get("default_model_id"),
+        default_model_name=data.get("default_model_name"),
+        default_model_version=data.get("default_model_version"),
+        status=data.get("status", "active"),
+        archived=_is_archived(data),
+        drive_folder_url=_drive_folder_url(data.get("drive_folders")),
+        created_by=data.get("created_by", ""),
+        created_by_email=data.get("created_by_email"),
+        created_at=data.get("created_at", datetime.now(UTC)),
+        updated_at=data.get("updated_at", datetime.now(UTC)),
+    )
+
+
+@router.post("/api/projects", response_model=ProjectResponse, status_code=201)
 async def create_project(body: ProjectCreate, current_user: CurrentUser):
-    """Create a new project."""
+    """Create a Project. default_model_id is optional convenience."""
+    default_model_name: str | None = None
+    default_model_version: int | None = None
+    if body.default_model_id:
+        m = _model_ref().document(body.default_model_id).get()
+        if not m.exists:
+            raise HTTPException(status_code=404, detail="default_model_id not found")
+        md = m.to_dict()
+        default_model_name = md.get("name")
+        default_model_version = md.get("version", 1)
+
+    # Sprint G1: resolve workspace
+    ws_id, ws_name = _resolve_workspace_id(current_user["uid"], body.workspace_id)
+
     now = datetime.now(UTC)
-    project_data: dict[str, Any] = {
+    doc_ref = _ref().document()
+    safe_code = storage_service.safe_name(body.code_name or body.name, fallback=doc_ref.id)
+    data = {
         "name": body.name,
-        "code_name": body.code_name or body.name.replace(" ", "_")[:20],
-        "owner_uid": current_user["uid"],
+        "code_name": safe_code,
+        "description": body.description,
+        "workspace_id": ws_id,
+        "workspace_name": ws_name,
+        "default_model_id": body.default_model_id,
+        "default_model_name": default_model_name,
+        "default_model_version": default_model_version,
         "status": "active",
-        "template_group_id": body.template_group_id,
-        "checkout": {},
+        "archived": False,
+        "created_by": current_user["uid"],
+        "created_by_email": current_user.get("email", ""),
         "created_at": now,
         "updated_at": now,
     }
-
-    # Create Drive folder (best-effort — don't fail project creation)
-    folder_id = create_project_folder(body.name)
-    if folder_id:
-        project_data["drive_folder_id"] = folder_id
-
-    doc_ref = get_firestore_client().collection(_projects_collection()).document()
-    doc_ref.set(project_data)
-    return _project_to_response(doc_ref.id, project_data)
+    doc_ref.set(data)
+    return _to_response(doc_ref.id, data)
 
 
-@router.get("", response_model=list[ProjectResponse])
-async def list_projects(current_user: CurrentUser):
-    """List projects owned by the current user."""
-    docs = (
-        get_firestore_client().collection(_projects_collection())
-        .where("owner_uid", "==", current_user["uid"])
-        .where("status", "==", "active")
-        .stream()
-    )
-    return [_project_to_response(doc.id, doc.to_dict()) for doc in docs]
+@router.get("/api/projects", response_model=list[ProjectSummary])
+async def list_projects(
+    current_user: CurrentUser,
+    include_archived: bool = Query(default=False),
+    workspace_id: str | None = Query(default=None, description="Sprint G1: filter to a single workspace"),
+):
+    """Sprint UX-01: hides archived projects by default; pass ?include_archived=true to see them.
+    Sprint G1: optional workspace_id filter.
+
+    Each summary now includes run_count, last_run_at, last_run_status, created_by_email,
+    drive_folder_url. Last-run is computed via a single per-project query (acceptable
+    until Project counts grow into the hundreds — denormalize then).
+    """
+    out: list[ProjectSummary] = []
+    runs_collection = _runs_ref()
+    q = _ref()
+    if workspace_id:
+        q = q.where("workspace_id", "==", workspace_id)
+    for doc in q.stream():
+        data = doc.to_dict()
+        if not include_archived and _is_archived(data):
+            continue
+        pack_count = sum(1 for _ in _pack_subref(doc.id).stream())
+        # Last-run lookup per project (small N today; denormalize when N grows)
+        last_run_at = None
+        last_run_status = None
+        run_count = 0
+        for r in runs_collection.where("project_id", "==", doc.id).stream():
+            run_count += 1
+            rd = r.to_dict()
+            sa = rd.get("started_at")
+            if sa is not None and (last_run_at is None or sa > last_run_at):
+                last_run_at = sa
+                last_run_status = rd.get("status")
+        out.append(ProjectSummary(
+            id=doc.id,
+            name=data.get("name", ""),
+            code_name=data.get("code_name", ""),
+            workspace_id=data.get("workspace_id"),
+            workspace_name=data.get("workspace_name"),
+            default_model_id=data.get("default_model_id"),
+            default_model_name=data.get("default_model_name"),
+            status=data.get("status", "active"),
+            archived=_is_archived(data),
+            drive_folder_url=_drive_folder_url(data.get("drive_folders")),
+            pack_count=pack_count,
+            run_count=run_count,
+            last_run_at=last_run_at,
+            last_run_status=last_run_status,
+            created_by=data.get("created_by", ""),
+            created_by_email=data.get("created_by_email"),
+            created_at=data.get("created_at", datetime.now(UTC)),
+        ))
+    return out
 
 
-@router.get("/{project_id}", response_model=ProjectResponse)
+@router.get("/api/projects/{project_id}", response_model=ProjectResponse)
 async def get_project(project_id: str, current_user: CurrentUser):
-    """Get a single project."""
-    doc = get_firestore_client().collection(_projects_collection()).document(project_id).get()
+    doc = _ref().document(project_id).get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
-    data = doc.to_dict()
-    if data.get("owner_uid") != current_user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    return _project_to_response(doc.id, data)
+    return _to_response(doc.id, doc.to_dict())
 
 
-@router.put("/{project_id}", response_model=ProjectResponse)
+@router.put("/api/projects/{project_id}", response_model=ProjectResponse)
 async def update_project(project_id: str, body: ProjectUpdate, current_user: CurrentUser):
-    """Update a project."""
-    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
+    doc_ref = _ref().document(project_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
-    data = doc.to_dict()
-    if data.get("owner_uid") != current_user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
     updates: dict[str, Any] = {"updated_at": datetime.now(UTC)}
     if body.name is not None:
         updates["name"] = body.name
     if body.code_name is not None:
-        updates["code_name"] = body.code_name
-    if body.template_group_id is not None:
-        updates["template_group_id"] = body.template_group_id
+        updates["code_name"] = storage_service.safe_name(body.code_name)
+    if body.description is not None:
+        updates["description"] = body.description
+    if body.default_model_id is not None:
+        m = _model_ref().document(body.default_model_id).get()
+        if not m.exists:
+            raise HTTPException(status_code=404, detail="default_model_id not found")
+        md = m.to_dict()
+        updates["default_model_id"] = body.default_model_id
+        updates["default_model_name"] = md.get("name")
+        updates["default_model_version"] = md.get("version", 1)
+    if body.status is not None:
+        if body.status not in ("active", "archived"):
+            raise HTTPException(status_code=400, detail="status must be 'active' or 'archived'")
+        updates["status"] = body.status
+        updates["archived"] = body.status == "archived"
+    if body.archived is not None:
+        updates["archived"] = body.archived
+        updates["status"] = "archived" if body.archived else "active"
     doc_ref.update(updates)
-    return _project_to_response(project_id, {**data, **updates})
+    return _to_response(project_id, {**doc.to_dict(), **updates})
 
 
-@router.post("/{project_id}/archive", response_model=ProjectResponse)
+@router.post("/api/projects/{project_id}/archive", response_model=ProjectResponse)
 async def archive_project(project_id: str, current_user: CurrentUser):
-    """Archive a project (soft delete)."""
-    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
+    doc_ref = _ref().document(project_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
-    data = doc.to_dict()
-    if data.get("owner_uid") != current_user["uid"]:
-        raise HTTPException(status_code=403, detail="Not authorized")
-
-    updates = {"status": "archived", "updated_at": datetime.now(UTC)}
+    updates = {"status": "archived", "archived": True, "updated_at": datetime.now(UTC)}
     doc_ref.update(updates)
-    return _project_to_response(project_id, {**data, **updates})
+    return _to_response(project_id, {**doc.to_dict(), **updates})
 
 
-@router.post("/{project_id}/create-drive-folder")
-async def create_drive_folder_for_project(project_id: str, current_user: CurrentUser):
-    """Create a Google Drive folder for a project that doesn't have one yet."""
-    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
+@router.post("/api/projects/{project_id}/unarchive", response_model=ProjectResponse)
+async def unarchive_project(project_id: str, current_user: CurrentUser):
+    """Sprint UX-01: re-activate an archived Project."""
+    doc_ref = _ref().document(project_id)
     doc = doc_ref.get()
     if not doc.exists:
         raise HTTPException(status_code=404, detail="Project not found")
-    data = doc.to_dict()
-    if data.get("drive_folder_id"):
-        return {"message": "Drive folder already exists", "drive_folder_id": data["drive_folder_id"]}
-
-    try:
-        folder_id = create_project_folder(data.get("name", "Untitled"))
-        if folder_id:
-            doc_ref.update({"drive_folder_id": folder_id, "updated_at": datetime.now(UTC)})
-            return {"message": "Drive folder created", "drive_folder_id": folder_id}
-        raise HTTPException(status_code=500, detail="Drive folder creation returned None. Check DRIVE_ROOT_FOLDER_ID env var and SA permissions.")
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Drive error: {e}") from e
-
-
-# ─── Checkout endpoints ───
-
-CHECKOUT_DURATION_HOURS = 2
-
-
-def _is_checkout_active(checkout: dict[str, Any]) -> bool:
-    """Check if a checkout is still active (not expired)."""
-    if not checkout.get("user_uid"):
-        return False
-    expires_at = checkout.get("expires_at")
-    if expires_at is None:
-        return False
-    if isinstance(expires_at, str):
-        expires_at = datetime.fromisoformat(expires_at)
-    return expires_at > datetime.now(UTC)
-
-
-@router.post("/{project_id}/checkout", response_model=ProjectResponse)
-async def checkout_project(project_id: str, current_user: CurrentUser):
-    """Acquire a checkout lock on a project (2-hour expiry)."""
-    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
-    doc = doc_ref.get()
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="Project not found")
-    data = doc.to_dict()
-
-    checkout = data.get("checkout", {}) or {}
-    if _is_checkout_active(checkout) and checkout.get("user_uid") != current_user["uid"]:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Project checked out by {checkout.get('user_name', 'another user')}",
-        )
-
-    now = datetime.now(UTC)
-    new_checkout = {
-        "user_uid": current_user["uid"],
-        "user_name": current_user.get("display_name", current_user.get("email", "")),
-        "checked_out_at": now,
-        "expires_at": now + timedelta(hours=CHECKOUT_DURATION_HOURS),
-    }
-    doc_ref.update({"checkout": new_checkout, "updated_at": now})
-    return _project_to_response(project_id, {**data, "checkout": new_checkout, "updated_at": now})
-
-
-@router.post("/{project_id}/checkin", response_model=ProjectResponse)
-async def checkin_project(project_id: str, current_user: CurrentUser):
-    """Release a checkout lock."""
-    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
-    doc = doc_ref.get()
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="Project not found")
-    data = doc.to_dict()
-
-    checkout = data.get("checkout", {}) or {}
-    holder = checkout.get("user_uid")
-    if holder and holder != current_user["uid"] and data.get("owner_uid") != current_user["uid"]:
-        raise HTTPException(status_code=403, detail="Only the holder or owner can release the checkout")
-
-    empty_checkout: dict[str, Any] = {"user_uid": None, "user_name": None, "checked_out_at": None, "expires_at": None}
-    now = datetime.now(UTC)
-    doc_ref.update({"checkout": empty_checkout, "updated_at": now})
-    return _project_to_response(project_id, {**data, "checkout": empty_checkout, "updated_at": now})
-
-
-@router.post("/{project_id}/force-release", response_model=ProjectResponse)
-async def force_release(project_id: str, current_user: CurrentUser):
-    """Force-release a checkout. Owner only."""
-    doc_ref = get_firestore_client().collection(_projects_collection()).document(project_id)
-    doc = doc_ref.get()
-    if not doc.exists:
-        raise HTTPException(status_code=404, detail="Project not found")
-    data = doc.to_dict()
-    if data.get("owner_uid") != current_user["uid"]:
-        raise HTTPException(status_code=403, detail="Only the project owner can force-release")
-
-    empty_checkout: dict[str, Any] = {"user_uid": None, "user_name": None, "checked_out_at": None, "expires_at": None}
-    now = datetime.now(UTC)
-    doc_ref.update({"checkout": empty_checkout, "updated_at": now})
-    return _project_to_response(project_id, {**data, "checkout": empty_checkout, "updated_at": now})
+    updates = {"status": "active", "archived": False, "updated_at": datetime.now(UTC)}
+    doc_ref.update(updates)
+    return _to_response(project_id, {**doc.to_dict(), **updates})

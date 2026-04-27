@@ -85,22 +85,24 @@ echo "Deploying frontend to Firebase Hosting (dev)..."
 firebase deploy --only hosting:dev --project "$PROJECT_ID"
 
 echo ""
-echo "Running health checks..."
+echo "Running smoke tests (Sprint UX-01)..."
 SERVICE_URL=$(gcloud run services describe "$SERVICE_NAME" \
     --project="$PROJECT_ID" \
     --region="$REGION" \
     --format="value(status.url)" 2>/dev/null)
 
-HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/health")
-FULL_HEALTH=$(curl -s "$SERVICE_URL/api/health/full")
+# Use the same script CI uses so local + CI smoke can't drift.
+export API_BASE_URL="$SERVICE_URL"
+export HOSTING_URL="https://dev-masteko-fm.web.app"
+export AUTH_TOKEN="dev-cli-smoke@example.com"
+./scripts/smoke/post_deploy_smoke.sh
 
-echo "/health: $HEALTH_STATUS"
-echo "/api/health/full: $FULL_HEALTH"
-
-if [[ "$HEALTH_STATUS" != "200" ]]; then
-    echo "Health check failed!"
-    exit 1
-fi
+echo ""
+echo "Running E2E smoke (Sprint INFRA-002 — seed → run → assert Sum=12)..."
+# This needs a Drive-scoped token. Set MFM_DRIVE_TOKEN to skip ADC and pass
+# explicitly (e.g., MFM_DRIVE_TOKEN=$(grab-token-from-browser-devtools)).
+# Without a token, the script SKIPS (does not fail the deploy).
+.venv/bin/python scripts/smoke/e2e_run_smoke.py
 
 echo ""
 echo "========================================="

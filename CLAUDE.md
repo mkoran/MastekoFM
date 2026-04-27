@@ -226,36 +226,78 @@ When you discover a bug, contradiction, or missing rule while doing other work �
 
 ## MastekoFM-Specific Rules
 
+### Tab-prefix discipline (canonical, post-redesign 2026-04)
+
+⚡ *This replaces the earlier "named ranges are the only interface" rule. Tab prefixes are simpler and proven.*
+
+Every `.xlsx` file MastekoFM touches uses **case-sensitive** tab prefixes:
+
+| Prefix | Meaning | Used on |
+|---|---|---|
+| `I_*` | Input tab — filled by an AssumptionPack | Model, AssumptionPack |
+| `O_*` | Output tab — published by a Model | Model |
+| `M_*` | Model-output tab — filled by Model's `O_*` values | OutputTemplate only |
+| (other) | Calculation tab | Model, OutputTemplate |
+
+**Strict case sensitivity** — `i_Cap Table` is a calc tab, NOT an input. Validators MUST use `str.startswith("I_")` (literal), never `.lower().startswith("i_")`.
+
+**Compatibility rules** (auto-validated by `services/run_validator.py`):
+1. AssumptionPack must contain every `I_*` tab declared on the Model
+2. AssumptionPack must contain ONLY `I_*` tabs (no `O_*`, no `M_*`, no calc tabs — those are Model territory)
+3. Every `M_<name>` tab in OutputTemplate must have a matching `O_<name>` tab in the Model
+
+Full contract for template authors: [docs/architecture/tab_prefix_contract.md](docs/architecture/tab_prefix_contract.md).
+
 ### Excel files
 - All .xlsx read/write operations use `openpyxl`
 - All formula calculation uses **LibreOffice headless** — never openpyxl's formula evaluator
-- Calculation flow: openpyxl injects values → save .xlsx → LibreOffice recalculates → openpyxl reads results
-- Named ranges are the ONLY interface between the platform and spreadsheets
-- Never hardcode cell references (A1, B2) — always use named ranges
-- Template validation: every template must declare its inputs and outputs
-- LibreOffice subprocess timeout: 30 seconds max
-- Users can modify and re-upload .xlsx files; platform must re-validate named ranges on upload
+- Calculation flow: openpyxl overlays cells → save .xlsx → LibreOffice recalculates → openpyxl reads results
+- Cell-copy overlay (NOT sheet replacement) preserves cross-tab formula integrity — proven on Campus Adele's 7,302 calc-tab formulas
+- LibreOffice subprocess timeout: 60 seconds per stage (we run two stages: Model recalc + OutputTemplate recalc)
+- Users can modify and re-upload .xlsx files; the validator runs again on every upload
+- For Drive-backed files, "upload" = `drive.files.update` (preserves the file_id and Sheets edit URL)
+
+### Three-way composition (NEW, post-redesign 2026-04)
+
+A Run is an immutable record of `(AssumptionPack@vN, Model@vM, OutputTemplate@vO)` plus its computed output.
+
+- AssumptionPacks live in Drive (`.xlsx`). NO GCS storage for packs (post-Sprint-B).
+- Models live in Drive (`.xlsx`). One Model can be paired with many AssumptionPacks.
+- OutputTemplates live in Drive (`.xlsx`, future: `.pdf` / `.docx` / Google Doc).
+- Runs are top-level Firestore entities, not nested under a Project.
+- Every Run records `*_drive_revision_id` for full reproducibility (re-fetch the exact bytes used).
 
 ### DAG operations
-- Always validate for cycles before adding edges
-- Recalculation uses topological sort — never recursive
-- Failed nodes do not halt the entire DAG — downstream nodes are marked "stale"
-- All recalculations are logged to BigQuery with timing data
-- Separate compute-heavy work (spreadsheet calculation) from API serving ⚡
+**DEPRECATED 2026-04**. The "DAG of spreadsheets" concept (where Sheet A's outputs feed Sheet B's inputs) was replaced by the three-way composition model. Cross-sheet references inside a single Model are handled natively by Excel formulas. The DAG router and dag_executor service will be deleted in Sprint B.
 
-### Assumptions
-- Every value change creates a history entry — no exceptions
-- Override values are stored separately from source values
-- Type validation runs before storage
-- Percentages stored as decimals (0.05, not 5)
+### Async execution discipline (Sprint C+)
+- POST /api/runs returns 202 Accepted with `{run_id}` — never blocks
+- Cloud Tasks queue (`mfm-runs-{env}`) delivers to a separate Cloud Run worker service
+- Worker uses OIDC authentication (Cloud Tasks → /internal/tasks/run/{id}); reject Firebase tokens on internal endpoints
+- Failed runs retry with exponential backoff (max 3); final failure leaves status=failed with error
+- Frontend polls Run doc via Firestore onSnapshot for live status
+- Separate compute-heavy work (spreadsheet calculation) from API serving ⚡ (lesson from MastekoDWH)
 
-### Reports
-- Reports generated asynchronously via Cloud Tasks
-- PDF generation must complete within 60 seconds
-- All generated files go to Google Drive
-- Report templates are HTML/CSS — never raw PDF construction
+### AssumptionPacks (renamed from "Scenario" in redesign 2026-04)
+- Every value change is captured by Drive's revision history (free, automatic)
+- Each upload bumps the AssumptionPack `version` integer
+- AssumptionPacks are IMMUTABLE per version — to change, you upload a new revision
+- AssumptionPacks live in `<drive_root>/MastekoFM/<project>/Inputs/<pack_code>.xlsx`
+- Archive (not delete) by setting `status=archived`; preserves Drive history
+- Percentages stored as decimals (0.05, not 5) — applies to literal cells in I_ tabs
 
-### Data sources
+### OutputTemplates (renamed from "Reports" in redesign 2026-04)
+- An OutputTemplate is the `.xlsx`/`.pdf`/`.docx`/Google Doc that shapes the final Run artifact
+- For format=`xlsx`: same engine as Models (M_/calc/O_ tab convention); no separate renderer needed
+- For format=`pdf`: HTML/CSS template + WeasyPrint (Sprint D)
+- For format=`docx`: python-docx with placeholder substitution (Sprint H)
+- For format=`google_doc`: Google Docs API copy + fill (Sprint H)
+- All generated outputs go to Google Drive `Outputs/` folder + GCS mirror (stable URL)
+- PDF generation must complete within 60 seconds (worker timeout)
+- Each OutputTemplate declares its required Model outputs (auto-detected from `M_*` tab names)
+
+### Data sources (rebuilt as AssumptionPack source connectors in Sprint F)
+**Old Datasource code DELETED in Sprint B.** Will be rebuilt as part of JSON AssumptionPack support.
 - Connector credentials stored in Secret Manager
 - All sync operations are idempotent
 - Sync errors must be recoverable (retry without data loss)
@@ -276,6 +318,15 @@ When you discover a bug, contradiction, or missing rule while doing other work �
 - UI hiding is NOT enforcement. Backend is always the source of truth.
 - Firebase Auth tokens and Cloud Tasks OIDC tokens are separate auth paths.
 - Last-admin protection: system must always have at least one admin.
+- **Custom header `X-MFM-Drive-Token` (NOT `X-Google-*`)** ⚡ — Firebase Hosting's Fastly edge strips `X-Google-*` headers before they reach Cloud Run. We learned this the hard way (v1.030→1.032). All Drive-token-passing must use `X-MFM-Drive-Token`.
+- **API client polls for token up to 3s before each request** ⚡ — fixes a race where components fire requests before Firebase's `onAuthStateChanged` sets the token. See `frontend/src/services/api.ts`.
+- OAuth scope: `drive.file` (narrow, non-sensitive) — no Google verification required, app available to any Google domain.
+- OAuth consent screen: External + In Production — multi-domain sign-in without test-user list.
+
+### Hosting & cache discipline ⚡
+- `firebase.json` sets `Cache-Control: no-cache, no-store, must-revalidate` on `/index.html`
+- `/assets/**` (Vite-hashed filenames) cached `immutable, max-age=31536000`
+- Reason: previously Firebase's default caching could serve stale `index.html` pointing at old JS hashes. Users would see a broken cached app forever. Fixed in v1.034.
 
 ---
 
