@@ -28,6 +28,9 @@ from backend.app.services import (
     run_executor,
     storage_service,
 )
+from backend.app.services import (
+    secrets as secrets_svc,
+)
 
 logger = logging.getLogger(__name__)
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -91,9 +94,21 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
         logger.info("Run %s already %s — skipping", run_id, run_data["status"])
         return run_data
 
-    # Drive token: prefer caller-supplied, fall back to persisted on doc.
+    # Drive token: prefer caller-supplied (Cloud Tasks delivers fresh from the
+    # original POST). Fall back to persisted-on-doc, decrypting if it's the
+    # KMS-encrypted form (Sprint F). Plaintext drive_token is legacy / fallback.
     if not drive_token:
-        drive_token = run_data.get("drive_token")
+        ciphertext = run_data.get("drive_token_encrypted")
+        if ciphertext:
+            try:
+                drive_token = secrets_svc.decrypt(ciphertext)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "KMS decrypt failed for run %s (%s); checking plaintext fallback",
+                    run_id, exc,
+                )
+        if not drive_token:
+            drive_token = run_data.get("drive_token")
 
     project_id = run_data["project_id"]
     pack_id = run_data["assumption_pack_id"]
@@ -184,6 +199,7 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
             "updated_at": completed_at,
             # Drop the persisted Drive token now that we don't need it again.
             "drive_token": None,
+            "drive_token_encrypted": None,  # Sprint F
         }
         run_ref.update(updates)
         logger.info("Run %s completed in %dms", run_id, duration_ms)
@@ -201,6 +217,7 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
             "updated_at": completed_at,
             # Don't keep token on failed runs either — we won't retry from here.
             "drive_token": None,
+            "drive_token_encrypted": None,  # Sprint F
         })
         logger.exception("Run %s failed: %s", run_id, err_msg)
         raise

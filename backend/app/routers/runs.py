@@ -40,6 +40,9 @@ from backend.app.services import (
     run_queue,
     run_validator,
 )
+from backend.app.services import (
+    secrets as secrets_svc,
+)
 
 router = APIRouter(tags=["runs"])
 
@@ -220,6 +223,24 @@ async def create_run(body: RunCreate, request: Request, current_user: CurrentUse
     started_at = datetime.now(UTC)
     proj_doc_for_name = _project_doc(body.project_id) or {}
 
+    # Sprint F: encrypt the persisted Drive token via KMS so it doesn't sit
+    # in Firestore in plaintext. Falls back to plaintext if KMS isn't
+    # available (local dev / first deploy before setup_kms_drive_tokens.sh ran).
+    drive_token_encrypted: str | None = None
+    drive_token_plain: str | None = None
+    if user_token:
+        if secrets_svc.is_kms_available():
+            try:
+                drive_token_encrypted = secrets_svc.encrypt(user_token)
+            except Exception as exc:  # noqa: BLE001 — fall back, don't fail the run
+                import logging
+                logging.getLogger(__name__).warning(
+                    "KMS encrypt failed (%s); persisting Drive token in plaintext", exc
+                )
+                drive_token_plain = user_token
+        else:
+            drive_token_plain = user_token
+
     run_ref = _runs_ref().document()
     run_data: dict[str, Any] = {
         "project_id": body.project_id,
@@ -243,9 +264,12 @@ async def create_run(body: RunCreate, request: Request, current_user: CurrentUse
         "triggered_by": current_user["uid"],
         "triggered_by_email": current_user.get("email", ""),
         # Persist Drive token so worker (running in another process) can read
-        # Drive-backed packs/templates. Cleared on terminal status. ⚠ Token TTL
-        # is ~1h from issue — runs that take >55min will fail to read Drive.
-        "drive_token": user_token,
+        # Drive-backed packs/templates. Cleared on terminal status.
+        # Sprint F: prefer drive_token_encrypted (KMS); drive_token plaintext
+        # is fallback for back-compat + KMS unavailable cases.
+        "drive_token_encrypted": drive_token_encrypted,
+        "drive_token": drive_token_plain,
+        # ⚠ Token TTL is ~1h; runs >55min from POST will fail to read Drive.
         "warnings": [],
     }
     run_ref.set(run_data)

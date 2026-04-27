@@ -123,6 +123,46 @@ def test_happy_path_runs_executor_and_writes_completed(mock_db, *_):
     assert updates[-1]["drive_token"] is None
 
 
+@patch("backend.app.routers._run_worker.secrets_svc.decrypt", return_value="decrypted-token-xyz")
+@patch(PATCH_UPLOAD, return_value="https://example/out.xlsx")
+@patch(PATCH_EXEC, return_value={"output_bytes": b"o", "warnings": []})
+@patch(PATCH_LOAD_TPL, return_value=b"t")
+@patch(PATCH_LOAD_PACK, return_value=b"p")
+@patch(PATCH_LOAD_MODEL, return_value=b"m")
+@patch(PATCH_DB)
+def test_worker_decrypts_encrypted_drive_token_when_no_caller_token(mock_db, *_):
+    """Sprint F: when Cloud Tasks doesn't deliver a token (e.g. retry without
+    body), the worker should fall back to drive_token_encrypted from the doc
+    and decrypt via KMS.
+    """
+    initial = {
+        "status": "pending",
+        "project_id": "p", "model_id": "m",
+        "assumption_pack_id": "pa", "output_template_id": "t",
+        "started_at": datetime.now(UTC),
+        "drive_token_encrypted": "ABCDEF==",  # base64 ciphertext
+        "drive_token": None,
+    }
+    updates = []
+    _wire(mock_db, initial_run=initial, captured_updates=updates)
+
+    # Patch load_pack to capture the user_token argument so we can assert
+    # the decrypted value flows through.
+    with patch(
+        PATCH_LOAD_PACK, return_value=b"p"
+    ) as mock_load_pack:
+        _run_worker.execute_run_by_id("run-x", drive_token=None)
+        # The worker should have called load_pack_bytes_compat with the
+        # decrypted token (not the ciphertext, not None).
+        kwargs = mock_load_pack.call_args.kwargs
+        assert kwargs.get("user_token") == "decrypted-token-xyz"
+
+    # And clears BOTH fields on terminal status
+    final = updates[-1]
+    assert final["drive_token"] is None
+    assert final["drive_token_encrypted"] is None
+
+
 @patch(PATCH_LOAD_MODEL, side_effect=RuntimeError("storage broken"))
 @patch(PATCH_DB)
 def test_failure_path_marks_failed_and_records_error(mock_db, _load):
