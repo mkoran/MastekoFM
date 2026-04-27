@@ -126,6 +126,9 @@ def _request(
     except urllib.error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
         print(f"  HTTP {exc.code} {method} {url}: {body_text}", file=sys.stderr)
+        # Stash the body on the exception so callers can inspect it. Calling
+        # exc.read() again would return empty (stream already consumed).
+        exc._body_text = body_text  # type: ignore[attr-defined]
         raise
 
 
@@ -152,11 +155,12 @@ def run_e2e(api_base: str, auth_token: str, drive_token: str) -> int:
         # SA storage-quota: same Drive limitation that affects run outputs.
         # Personal Drives reject SA-owned files. Real users have quota; CI doesn't.
         # Treat as soft pass with a clear WARN — engine integration is not exercised.
+        body_text = getattr(exc, "_body_text", "") or ""
         try:
-            body = json.loads(exc.read().decode())
-            detail = str(body.get("detail", body))
+            body = json.loads(body_text) if body_text else {}
+            detail = str(body.get("detail", body_text))
         except Exception:  # noqa: BLE001
-            detail = ""
+            detail = body_text
         # New explicit 403 from seed handler, or legacy 500. Match either.
         if (exc.code in (500, 403)) and (
             "storageQuotaExceeded" in detail or "storage quota" in detail.lower()
