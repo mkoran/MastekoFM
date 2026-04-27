@@ -9,6 +9,7 @@ import SettingsPage from './pages/SettingsPage'
 import ModelsPage from './pages/ModelsPage'
 import ModelDetailPage from './pages/ModelDetailPage'
 import WorkspaceSettingsPage from './pages/WorkspaceSettingsPage'
+import HelpPage from './pages/HelpPage'
 import ProjectsPage from './pages/ProjectsPage'
 import ProjectView from './pages/ProjectView'
 import OutputTemplatesPage from './pages/OutputTemplatesPage'
@@ -50,6 +51,7 @@ function AppRoutes() {
       <Route path="/tree/projects/:projectId/packs/:packId/:nodeKind/:tab/:cellRef" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
       <Route path="/workspaces/:workspaceId" element={<P><WorkspaceSettingsPage /></P>} />
       <Route path="/settings" element={<P><SettingsPage /></P>} />
+      <Route path="/help" element={<P><HelpPage /></P>} />
     </Routes>
   )
 }

@@ -150,6 +150,10 @@ function Layout({ children }: { children: React.ReactNode }) {
           <Link to="/settings" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${isActive('/settings') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
             <span className="text-xs">&#9881;</span> Settings
           </Link>
+
+          <Link to="/help" className={`mb-1 flex items-center gap-2 rounded-lg px-3 py-2 ${location.pathname.startsWith('/help') ? 'bg-gray-700 text-white' : 'text-gray-400 hover:bg-gray-800 hover:text-white'}`}>
+            <span className="text-xs">📖</span> Help
+          </Link>
         </nav>
 
         <div className="border-t border-gray-700 px-4 py-3">

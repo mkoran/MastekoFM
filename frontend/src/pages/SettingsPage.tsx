@@ -1,8 +1,20 @@
 import { useEffect, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { api } from '../services/api'
 
 type StorageKind = 'gcs' | 'drive_xlsx'
+
+interface SeedResult {
+  workspace_id?: string
+  workspace_code?: string
+  project_id?: string
+  model_id?: string
+  output_template_id?: string
+  assumption_pack_id?: string
+  created?: string[]
+  existing?: string[]
+}
 
 function SettingsPage() {
   const { user, googleAccessToken, signInWithGoogle } = useAuth()
@@ -14,6 +26,9 @@ function SettingsPage() {
   const [testingDrive, setTestingDrive] = useState(false)
   const [gcsResult, setGcsResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null)
   const [driveResult, setDriveResult] = useState<{ success: boolean; message?: string; error?: string } | null>(null)
+  const [seeding, setSeeding] = useState(false)
+  const [seedResult, setSeedResult] = useState<SeedResult | null>(null)
+  const [seedError, setSeedError] = useState<string | null>(null)
 
   useEffect(() => {
     api.get<{ drive_root_folder_id: string; default_scenario_storage_kind: StorageKind }>('/settings')
@@ -50,6 +65,24 @@ function SettingsPage() {
     finally { setTestingGCS(false) }
   }
 
+  const handleSeedHelloWorld = async () => {
+    if (!googleAccessToken) {
+      setSeedError('Sign in with Google first — Hello World needs Drive access to upload the seed files.')
+      return
+    }
+    setSeeding(true)
+    setSeedResult(null)
+    setSeedError(null)
+    try {
+      const result = await api.post<SeedResult>('/seed/helloworld', {})
+      setSeedResult(result)
+    } catch (e) {
+      setSeedError(e instanceof Error ? e.message : String(e))
+    } finally {
+      setSeeding(false)
+    }
+  }
+
   const handleTestDrive = async () => {
     if (!googleAccessToken) {
       setDriveResult({ success: false, error: 'Sign in with Google first (click the button above).' })
@@ -71,6 +104,54 @@ function SettingsPage() {
   return (
     <div className="p-8">
       <h1 className="mb-6 text-2xl font-bold text-gray-900">Settings</h1>
+
+      {/* Sprint G2: One-click Hello World seed */}
+      <div className="mb-6 max-w-2xl rounded border bg-white p-6">
+        <h2 className="mb-2 text-lg font-medium">Quickstart — seed Hello World</h2>
+        <p className="mb-3 text-sm text-gray-600">
+          Creates a complete demo: a Project + Model + AssumptionPack + OutputTemplate that
+          verify the engine end-to-end. Idempotent — re-running returns the existing record IDs
+          rather than duplicating. New to the system?{' '}
+          <Link to="/help" className="text-blue-600 hover:underline">Read the manual</Link>.
+        </p>
+        <button
+          onClick={handleSeedHelloWorld}
+          disabled={seeding || !googleAccessToken}
+          className="rounded bg-green-600 px-4 py-2 text-sm text-white hover:bg-green-700 disabled:opacity-50"
+        >
+          {seeding ? 'Seeding… (Drive uploads ~10–20s)' : '🌱 Seed Hello World'}
+        </button>
+        {!googleAccessToken && (
+          <p className="mt-2 text-xs text-amber-700">
+            Sign in with Google first (section below) — the seed needs your Drive access token.
+          </p>
+        )}
+        {seedError && (
+          <div className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+            <strong>Seed failed.</strong> {seedError}
+          </div>
+        )}
+        {seedResult && (
+          <div className="mt-3 rounded border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800">
+            <p className="font-medium mb-1">
+              {(seedResult.created?.length ?? 0) > 0 ? 'Hello World seeded ✓' : 'Hello World already existed ✓'}
+            </p>
+            {seedResult.created && seedResult.created.length > 0 && (
+              <p className="mb-1">Created: <code className="text-[10px]">{seedResult.created.join(', ')}</code></p>
+            )}
+            {seedResult.existing && seedResult.existing.length > 0 && (
+              <p className="mb-1">Existing: <code className="text-[10px]">{seedResult.existing.join(', ')}</code></p>
+            )}
+            {seedResult.project_id && (
+              <p className="mt-2">
+                <Link to={`/projects/${seedResult.project_id}`} className="underline font-medium">
+                  → Open the Hello World project
+                </Link>
+              </p>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* Google Auth status */}
       <div className="mb-6 max-w-2xl rounded border bg-white p-6">
