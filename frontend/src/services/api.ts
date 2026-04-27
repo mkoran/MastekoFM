@@ -46,7 +46,26 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
     headers,
   })
   if (!response.ok) {
-    throw new Error(`API error: ${response.status} ${response.statusText}`)
+    // Read the body and surface FastAPI's `detail` (or any plaintext) so
+    // useful error messages aren't lost. Falls back to status text.
+    let detail = ''
+    try {
+      const ct = response.headers.get('content-type') ?? ''
+      if (ct.includes('application/json')) {
+        const body = await response.json() as { detail?: string | object }
+        detail = typeof body.detail === 'string'
+          ? body.detail
+          : body.detail
+            ? JSON.stringify(body.detail)
+            : JSON.stringify(body)
+      } else {
+        detail = (await response.text()).slice(0, 500)
+      }
+    } catch {
+      detail = ''
+    }
+    const statusPart = `${response.status}${response.statusText ? ' ' + response.statusText : ''}`
+    throw new Error(detail ? `${statusPart} — ${detail}` : `API error: ${statusPart}`)
   }
   return response.json()
 }

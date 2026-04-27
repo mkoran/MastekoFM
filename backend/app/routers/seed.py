@@ -314,30 +314,39 @@ def _seed_one(
 
 
 def _seed_one_with_clear_errors(**kwargs):
-    """Wraps _seed_one to convert internal RuntimeErrors into HTTPException with
-    the original message in the body. Without this, FastAPI's default 500 swallows
-    the upstream error (e.g. Drive storageQuotaExceeded), making CI debugging
-    impossible.
+    """Wraps _seed_one to convert internal exceptions into HTTPException with
+    the original message in the body. Without this, FastAPI's default 500
+    swallows the upstream error, making the frontend show only "API error: 500"
+    and Cloud Logging show an empty ERROR record.
+
+    Always logs the exception with full traceback so we can debug from logs
+    too, not only from the response body.
     """
+    import logging
+    log = logging.getLogger(__name__)
     try:
         return _seed_one(**kwargs)
     except HTTPException:
         raise
     except RuntimeError as exc:
+        log.exception("Seed RuntimeError")
         msg = str(exc)
         if "storageQuotaExceeded" in msg or "storage quota" in msg.lower():
             raise HTTPException(
                 status_code=403,
                 detail=(
-                    "Drive storageQuotaExceeded — Service Accounts cannot create "
-                    "files in personal Drives. Either sign in as a real user "
-                    "(user tokens have storage quota), or migrate the MastekoFM "
-                    "Drive root into a Shared Drive. Original: " + msg
+                    "Drive storageQuotaExceeded — the signed-in account cannot "
+                    "create files at the Drive location used. Most common cause: "
+                    "service-account context (e.g. CI), since SAs have no Drive "
+                    "storage quota. Real users normally have quota. Fix: sign "
+                    "in as a real user, or migrate the MastekoFM Drive root "
+                    "into a Shared Drive. Original: " + msg
                 ),
             ) from exc
         raise HTTPException(status_code=500, detail=f"Seed failed: {msg}") from exc
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status_code=500, detail=f"Seed failed: {exc}") from exc
+        log.exception("Seed unexpected exception")
+        raise HTTPException(status_code=500, detail=f"Seed failed: {type(exc).__name__}: {exc}") from exc
 
 
 @router.post("/api/seed/helloworld")
