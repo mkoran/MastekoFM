@@ -20,6 +20,7 @@ from backend.app.routers import (
     seed,
     settings,
     tree,
+    workspaces,
 )
 
 app = FastAPI(
@@ -41,6 +42,7 @@ app.add_middleware(
 
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(workspaces.router)
 app.include_router(projects.router)
 app.include_router(models.router)
 app.include_router(output_templates.router)

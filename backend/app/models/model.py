@@ -18,11 +18,13 @@ class ModelSummary(BaseModel):
     id: str
     name: str
     code_name: str
+    workspace_id: str | None = None  # Sprint G1
     version: int
     input_tab_count: int
     output_tab_count: int
     calc_tab_count: int
     archived: bool = False  # Sprint UX-01
+    drive_folder_url: str | None = None  # Sprint G1: per-Model folder URL
     drive_url: str | None = None  # Sprint UX-01: opens in Sheets/Drive
     created_by_email: str | None = None  # Sprint UX-01
     created_at: datetime
@@ -36,13 +38,16 @@ class ModelResponse(BaseModel):
     name: str
     code_name: str
     description: str
+    workspace_id: str | None = None  # Sprint G1
     version: int
     input_tabs: list[str]
     output_tabs: list[str]
     calc_tabs: list[str]
-    storage_path: str                 # gs:// path (or drive:<file_id>)
-    drive_file_id: str | None = None
-    drive_url: str | None = None  # Sprint UX-01: derived edit URL
+    storage_path: str | None = None   # legacy GCS path; new Models are Drive-only
+    drive_folder_id: str | None = None  # Sprint G1: per-Model folder
+    drive_folder_url: str | None = None  # Sprint G1: derived URL of the folder
+    drive_file_id: str | None = None    # the canonical (latest) .xlsx
+    drive_url: str | None = None  # Sprint UX-01: derived edit URL of the .xlsx
     size_bytes: int
     archived: bool = False  # Sprint UX-01
     uploaded_by: str

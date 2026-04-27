@@ -152,39 +152,74 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
         )
         pack_code = pack.get("code_name", "pack")
         tpl_code = tpl.get("code_name", "tpl")
-        ts = started_at.strftime("%Y%m%d_%H%M%S")
-        out_filename = f"{ts}_{project_code}_{pack_code}_{tpl_code}.xlsx"
-        out_path = f"runs/{run_id}/{out_filename}"
-        download_url = storage_service.upload_xlsx(
-            out_path, result["output_bytes"], download_filename=out_filename
+        # Sprint G1: outputs go to a PER-RUN Drive folder. Each run owns a
+        # folder under {workspace}/Projects/{project}/Runs/{ts}_{pack}_{tpl}/.
+        # Multi-format outputs (xlsx today, pdf/docx future) live alongside
+        # versioned filenames inside the run folder.
+        root_doc = (
+            get_firestore_client()
+            .collection(f"{settings.firestore_collection_prefix}settings")
+            .document("app")
+            .get()
+            .to_dict()
+            or {}
+        )
+        root = root_doc.get("drive_root_folder_id") or settings.drive_root_folder_id
+
+        # Resolve workspace code (from project's workspace_id)
+        ws_code = "default"
+        ws_id = proj.get("workspace_id")
+        if ws_id:
+            ws_snap = (
+                get_firestore_client()
+                .collection(f"{settings.firestore_collection_prefix}workspaces")
+                .document(ws_id)
+                .get()
+            )
+            if ws_snap.exists:
+                ws_code = (ws_snap.to_dict() or {}).get("code_name", "default")
+
+        run_folder_name_str = drive_service.run_folder_name(started_at, pack_code, tpl_code)
+        out_filename = drive_service.versioned_filename(
+            f"{pack_code}_{tpl_code}", 1, ext="xlsx"
         )
 
-        # Best-effort Drive copy
         output_drive_file_id: str | None = None
-        if drive_token:
+        output_folder_id: str | None = None
+        download_url: str | None = None
+
+        if root and drive_token:
             try:
-                root_doc = (
-                    get_firestore_client()
-                    .collection(f"{settings.firestore_collection_prefix}settings")
-                    .document("app")
-                    .get()
-                    .to_dict()
-                    or {}
+                ws_folders = drive_service.ensure_workspace_folders(
+                    root, ws_code, user_access_token=drive_token
                 )
-                root = root_doc.get("drive_root_folder_id") or settings.drive_root_folder_id
-                if root:
-                    folders = drive_service.ensure_project_folders(
-                        root, project_code, user_access_token=drive_token
+                proj_folders = drive_service.ensure_project_folder_v2(
+                    ws_folders["projects"], project_code, user_access_token=drive_token
+                )
+                output_folder_id = drive_service.ensure_run_folder(
+                    proj_folders["runs"], run_folder_name_str, user_access_token=drive_token
+                )
+                output_drive_file_id = drive_service.upload_file(
+                    output_folder_id, out_filename, result["output_bytes"],
+                    XLSX_MIME, user_access_token=drive_token,
+                )
+                if output_drive_file_id:
+                    download_url = (
+                        f"https://drive.google.com/uc?id={output_drive_file_id}&export=download"
                     )
-                    output_drive_file_id = drive_service.upload_file(
-                        folders["outputs"],
-                        out_filename,
-                        result["output_bytes"],
-                        XLSX_MIME,
-                        user_access_token=drive_token,
-                    )
-            except Exception:  # noqa: BLE001 — Drive copy is best-effort
-                logger.warning("Drive output copy failed for run %s", run_id, exc_info=True)
+            except Exception:  # noqa: BLE001 — Drive ops are best-effort; run still records
+                logger.warning(
+                    "Drive output upload failed for run %s — output bytes lost",
+                    run_id, exc_info=True,
+                )
+
+        if not output_drive_file_id:
+            # No Drive available (no token / no root) — record a failed-ish state
+            # but keep status=completed since the engine succeeded. UI will show
+            # "no downloadable output" to make this loud.
+            logger.warning(
+                "Run %s completed but output bytes were not persisted (no Drive)", run_id
+            )
 
         completed_at = datetime.now(UTC)
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -192,14 +227,23 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
             "status": "completed",
             "completed_at": completed_at,
             "duration_ms": duration_ms,
-            "output_storage_path": out_path,
+            "output_folder_id": output_folder_id,                                # Sprint G1
+            "output_folder_url": drive_service.folder_url(output_folder_id),     # Sprint G1
+            "output_artifacts": [                                                # Sprint G1
+                {
+                    "format": "xlsx",
+                    "drive_file_id": output_drive_file_id,
+                    "download_url": download_url,
+                    "size_bytes": len(result["output_bytes"]),
+                }
+            ] if output_drive_file_id else [],
+            # Legacy fields kept for back-compat (frontends still read these)
             "output_download_url": download_url,
             "output_drive_file_id": output_drive_file_id,
             "warnings": result["warnings"],
             "updated_at": completed_at,
-            # Drop the persisted Drive token now that we don't need it again.
             "drive_token": None,
-            "drive_token_encrypted": None,  # Sprint F
+            "drive_token_encrypted": None,
         }
         run_ref.update(updates)
         logger.info("Run %s completed in %dms", run_id, duration_ms)

@@ -1,12 +1,17 @@
 """Seed endpoints — populate DEV with canonical scenarios from seed/* files.
 
-Sprint B: rewritten under the new entity/collection names:
-  - models      (was excel_templates)
-  - projects    (was excel_projects)
-  - assumption_packs  (was scenarios, as a per-project subcollection)
+Sprint G1: rewritten under the new Workspace + per-folder + versioned-filename
+layout. Each entity gets its own Drive folder. All files use {code}_v001.xlsx.
 
-Both /api/seed/helloworld and /api/seed/campus-adele are idempotent: re-running
-returns the existing IDs rather than duplicating objects.
+  Workspaces/{ws_code}/
+    Models/{model_code}/{model_code}_v001.xlsx
+    OutputTemplates/{tpl_code}/{tpl_code}_v001.xlsx
+    Projects/{project_code}/
+      AssumptionPacks/{pack_code}/{pack_code}_v001.xlsx
+      Runs/{ts}_{pack}_{tpl}/{pack}_{tpl}_v001.xlsx (created at run time)
+
+The seed auto-creates a "Personal" workspace for the calling user if they
+don't have one. Idempotent: re-running returns existing ids.
 """
 from datetime import UTC, datetime
 from pathlib import Path
@@ -24,6 +29,33 @@ CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _get_or_create_personal_workspace(uid: str, email: str, root: str, user_token: str) -> tuple[str, str]:
+    """Returns (workspace_id, workspace_code). Auto-creates 'Personal' if none."""
+    db = get_firestore_client()
+    coll = db.collection(f"{_prefix()}workspaces")
+    for doc in coll.where("members", "array_contains", uid).limit(1).stream():
+        d = doc.to_dict()
+        return doc.id, d.get("code_name", "personal")
+    # Create new
+    code = storage_service.safe_name(f"personal-{uid[:6]}", fallback="personal")
+    folder_id = drive_service.ensure_workspace_folders(root, code, user_access_token=user_token)["workspace"]
+    now = datetime.now(UTC)
+    new_ref = coll.document()
+    new_ref.set({
+        "name": "Personal",
+        "code_name": code,
+        "description": f"Auto-created via seed for {email}",
+        "members": [uid],
+        "drive_folder_id": folder_id,
+        "archived": False,
+        "created_by": uid,
+        "created_by_email": email,
+        "created_at": now,
+        "updated_at": now,
+    })
+    return new_ref.id, code
 
 
 def _prefix() -> str:
@@ -93,28 +125,43 @@ def _seed_one(
         if not p.exists():
             raise HTTPException(status_code=500, detail=f"Seed file missing: {p}")
 
-    # ── 1. Model ────────────────────────────────────────────────────────────
+    # ── 0. Workspace (Sprint G1) ────────────────────────────────────────────
+    ws_id, ws_code = _get_or_create_personal_workspace(
+        current_user["uid"], current_user.get("email", ""), root, user_token,
+    )
+    ws_folders = drive_service.ensure_workspace_folders(root, ws_code, user_access_token=user_token)
+
+    # ── 1. Model (Drive-backed; Sprint G1) ──────────────────────────────────
     model_id, model_data = _find_by_code(f"{_prefix()}models", model_code)
     if model_id:
         result["existing"].append(f"model={model_id}")
     else:
         content = model_path.read_bytes()
         classes = excel_template_engine.classify_bytes(content)
+        model_folder_id = drive_service.ensure_model_folder(
+            ws_folders["models"], model_code, user_access_token=user_token,
+        )
+        filename = drive_service.versioned_filename(model_code, 1, ext="xlsx")
+        drive_id = drive_service.upload_file(
+            model_folder_id, filename, content, XLSX_MIME, user_access_token=user_token,
+        )
         model_ref = db.collection(f"{_prefix()}models").document()
-        storage_path = f"models/{model_ref.id}/v1_{model_filename}"
-        storage_service.upload_xlsx(storage_path, content, download_filename=model_filename)
         model_data = {
             "name": model_name,
             "code_name": model_code,
             "description": model_description,
+            "workspace_id": ws_id,
             "version": 1,
             "input_tabs": classes["input_tabs"],
             "output_tabs": classes["output_tabs"],
             "calc_tabs": classes["calc_tabs"],
-            "storage_path": storage_path,
-            "drive_file_id": None,
+            "storage_path": None,
+            "drive_folder_id": model_folder_id,
+            "drive_file_id": drive_id,
             "size_bytes": len(content),
             "uploaded_by": current_user["uid"],
+            "uploaded_by_email": current_user.get("email", ""),
+            "created_by_email": current_user.get("email", ""),
             "created_at": now,
             "updated_at": now,
         }
@@ -122,33 +169,38 @@ def _seed_one(
         model_id = model_ref.id
         result["created"].append(f"model={model_id}")
 
-    # ── 2. OutputTemplate (Drive-backed) ────────────────────────────────────
+    # ── 2. OutputTemplate (Drive-backed; per-template folder; Sprint G1) ────
     tpl_id, tpl_data = _find_by_code(f"{_prefix()}output_templates", template_code)
     if tpl_id:
         result["existing"].append(f"output_template={tpl_id}")
     else:
         content = tpl_path.read_bytes()
         classes = excel_template_engine.classify_bytes(content)
-        mfm = drive_service.find_or_create_folder("MastekoFM", root, user_token)
-        tpl_folder = drive_service.find_or_create_folder("OutputTemplates", mfm, user_token)
+        tpl_folder_id = drive_service.ensure_output_template_folder(
+            ws_folders["output_templates"], template_code, user_access_token=user_token,
+        )
+        filename = drive_service.versioned_filename(template_code, 1, ext="xlsx")
         drive_id = drive_service.upload_file(
-            tpl_folder, output_template_filename, content, XLSX_MIME, user_access_token=user_token
+            tpl_folder_id, filename, content, XLSX_MIME, user_access_token=user_token,
         )
         tpl_ref = db.collection(f"{_prefix()}output_templates").document()
         tpl_data = {
             "name": template_name,
             "code_name": template_code,
             "description": template_description,
+            "workspace_id": ws_id,
             "format": "xlsx",
             "version": 1,
             "storage_kind": "drive_xlsx",
             "storage_path": None,
+            "drive_folder_id": tpl_folder_id,
             "drive_file_id": drive_id,
             "m_tabs": classes["m_tabs"],
             "output_tabs": classes["output_tabs"],
             "calc_tabs": classes["calc_tabs"],
             "size_bytes": len(content),
             "uploaded_by": current_user["uid"],
+            "uploaded_by_email": current_user.get("email", ""),
             "created_at": now,
             "updated_at": now,
         }
@@ -156,25 +208,37 @@ def _seed_one(
         tpl_id = tpl_ref.id
         result["created"].append(f"output_template={tpl_id}")
 
-    # ── 3. Project ──────────────────────────────────────────────────────────
+    # ── 3. Project (Sprint G1: workspace_id + per-project folder) ───────────
     proj_id, proj_data = _find_by_code(f"{_prefix()}projects", project_code)
     if proj_id:
         result["existing"].append(f"project={proj_id}")
     else:
-        proj_ref = db.collection(f"{_prefix()}projects").document()
-        folders = drive_service.ensure_project_folders(
-            root, project_code, user_access_token=user_token
+        proj_folders = drive_service.ensure_project_folder_v2(
+            ws_folders["projects"], project_code, user_access_token=user_token,
         )
+        proj_ref = db.collection(f"{_prefix()}projects").document()
         proj_data = {
             "name": project_name,
             "code_name": project_code,
             "description": project_description,
+            "workspace_id": ws_id,
+            "workspace_name": ws_code,
             "default_model_id": model_id,
             "default_model_name": model_name,
             "default_model_version": 1,
             "status": "active",
-            "drive_folders": folders,
+            "archived": False,
+            # Sprint G1: store the new per-project folder ids
+            "drive_folders": {
+                "project": proj_folders["project"],
+                "packs": proj_folders["packs"],
+                "runs": proj_folders["runs"],
+                # Legacy keys for back-compat with old code paths
+                "inputs": proj_folders["packs"],
+                "outputs": proj_folders["runs"],
+            },
             "created_by": current_user["uid"],
+            "created_by_email": current_user.get("email", ""),
             "created_at": now,
             "updated_at": now,
         }
@@ -182,18 +246,28 @@ def _seed_one(
         proj_id = proj_ref.id
         result["created"].append(f"project={proj_id}")
 
-    # ── 4. AssumptionPack (Drive-backed) ────────────────────────────────────
+    # ── 4. AssumptionPack (per-pack folder + versioned filename; Sprint G1) ─
     pack_id, pack_data = _find_pack_by_code(proj_id, pack_code)
     if pack_id:
         result["existing"].append(f"assumption_pack={pack_id}")
     else:
         content = pack_path.read_bytes()
         classes = excel_template_engine.classify_bytes(content)
-        folders = (proj_data or {}).get("drive_folders") or drive_service.ensure_project_folders(
-            root, project_code, user_access_token=user_token
+        # Re-derive proj packs folder id from project doc
+        proj_doc = db.collection(f"{_prefix()}projects").document(proj_id).get()
+        packs_folder = (proj_doc.to_dict() or {}).get("drive_folders", {}).get("packs")
+        if not packs_folder:
+            # Defensive fallback
+            proj_folders = drive_service.ensure_project_folder_v2(
+                ws_folders["projects"], project_code, user_access_token=user_token,
+            )
+            packs_folder = proj_folders["packs"]
+        pack_folder_id = drive_service.ensure_pack_folder(
+            packs_folder, pack_code, user_access_token=user_token,
         )
+        filename = drive_service.versioned_filename(pack_code, 1, ext="xlsx")
         drive_id = drive_service.upload_file(
-            folders["inputs"], pack_filename, content, XLSX_MIME, user_access_token=user_token,
+            pack_folder_id, filename, content, XLSX_MIME, user_access_token=user_token,
         )
         pack_ref = (
             db.collection(f"{_prefix()}projects")
@@ -207,14 +281,17 @@ def _seed_one(
             "description": pack_description,
             "project_id": proj_id,
             "status": "active",
+            "archived": False,
             "storage_kind": "drive_xlsx",
             "storage_path": None,
+            "drive_folder_id": pack_folder_id,
             "drive_file_id": drive_id,
             "size_bytes": len(content),
             "version": 1,
             "input_tabs": classes["input_tabs"],
             "last_run": None,
             "created_by": current_user["uid"],
+            "created_by_email": current_user.get("email", ""),
             "created_at": now,
             "updated_at": now,
         }
@@ -223,6 +300,8 @@ def _seed_one(
         result["created"].append(f"assumption_pack={pack_id}")
 
     return {
+        "workspace_id": ws_id,
+        "workspace_code": ws_code,
         "model_id": model_id,
         "output_template_id": tpl_id,
         "project_id": proj_id,

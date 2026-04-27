@@ -18,6 +18,7 @@ class ProjectCreate(BaseModel):
     name: str
     code_name: str = ""
     description: str = ""
+    workspace_id: str | None = None  # Sprint G1 — defaults to user's first workspace if omitted
     default_model_id: str | None = None  # optional pre-selected Model in the New Run modal
 
 
@@ -39,6 +40,8 @@ class ProjectResponse(BaseModel):
     name: str
     code_name: str
     description: str
+    workspace_id: str | None = None  # Sprint G1
+    workspace_name: str | None = None  # Sprint G1 — denormalized
     default_model_id: str | None = None
     default_model_name: str | None = None
     default_model_version: int | None = None
@@ -57,6 +60,8 @@ class ProjectSummary(BaseModel):
     id: str
     name: str
     code_name: str
+    workspace_id: str | None = None  # Sprint G1
+    workspace_name: str | None = None  # Sprint G1
     default_model_id: str | None = None
     default_model_name: str | None = None
     status: str

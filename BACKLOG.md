@@ -18,6 +18,8 @@
 | **INFRA-002** | E2E smoke (seed + run + assert Sum=12) in CI — closes Sprint UX-01's "what the bash smoke can't catch" gap | XS (~2h) | UX-01 — **✅ shipped (script + workflow); activates fully when Marc shares Drive root with deployer SA** |
 | **C** | Async runs via Cloud Tasks — POST returns 202; worker processes; UI polls. Sync-thread fallback when queue not configured | M (~4-5 days) | B — **✅ code shipped; activate per env via `./scripts/infra/setup_runs_queue.sh <env>`** |
 | **F** | KMS encryption of persisted Drive tokens (Sprint C tech debt) — new `services/secrets.py`, encrypt-on-write, decrypt-on-read, plaintext fallback if KMS unavailable | XS (~1h) | C — **✅ code shipped; activate per env via `./scripts/infra/setup_kms_drive_tokens.sh <env>`** |
+| **G1** | Workspace entity above Projects + new Drive folder hierarchy (`Workspaces/{ws}/Models/{code}/{code}_v001.xlsx`) + versioned filenames + Models in Drive (drop GCS) + per-Run output folder | M (~3-4 days) | F — **✅ backend shipped; frontend workspace context in nav; deploy pending** |
+| **G2** | UX surfaces: Models page Drive-folder column + Calculations query view + Model detail page + RunDetail folder URL + AssumptionPack revision history panel | M (~2-3 days) | G1 — ready to start after G1 deploys |
 | **D** | PDF OutputTemplates — WeasyPrint + first investor summary template for Campus Adele | S (~2-3 days) | B (can run parallel with C) |
 | **E** | Multi-user permissions — Project members, owner/editor/viewer roles, Drive sharing automation | M (~4-5 days) | B |
 | **F** | JSON AssumptionPacks + Airtable connector — schema declarations on Models, key→cell binding | L (~6-8 days) | B |

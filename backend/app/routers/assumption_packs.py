@@ -90,6 +90,8 @@ def _to_scenario(doc_id: str, data: dict[str, Any]) -> AssumptionPackResponse:
         archived=_is_archived(data),
         storage_kind=data.get("storage_kind") or store.kind,
         storage_path=data.get("storage_path"),
+        drive_folder_id=data.get("drive_folder_id"),
+        drive_folder_url=drive_service.folder_url(data.get("drive_folder_id")),
         drive_file_id=data.get("drive_file_id"),
         edit_url=store.open_url(data),
         size_bytes=data.get("size_bytes", 0),
@@ -183,19 +185,21 @@ def _resolve_drive_folders(
 async def create_scenario(
     project_id: str, body: AssumptionPackCreate, request: Request, current_user: CurrentUser
 ):
-    """Create a Scenario. Seeds the inputs-only file from the Template (or clones another scenario).
+    """Sprint G1: Create an AssumptionPack. Seeded from the Project's default
+    Model (or cloned from another pack). Stored in Drive at:
 
-    Respects `body.storage_kind` if provided; otherwise falls back to the workspace
-    default (`/api/settings` → `default_scenario_storage_kind`). Drive storage
-    requires a Google OAuth token in the X-MFM-Drive-Token header.
+        Workspaces/{ws}/Projects/{proj}/AssumptionPacks/{pack_code}/{pack_code}_v001.xlsx
+
+    Subsequent uploads via /upload create _v002.xlsx, _v003.xlsx, etc. — that's
+    the version history Marc wanted, visible directly in Drive.
     """
     proj, model = _load_project_and_default_model(project_id)
     user_token = request.headers.get("X-MFM-Drive-Token")
-
-    # Decide storage kind
-    kind = body.storage_kind or _default_storage_kind()
-    if kind not in (pack_store.STORAGE_KIND_GCS, pack_store.STORAGE_KIND_DRIVE_XLSX):
-        raise HTTPException(status_code=400, detail=f"Unknown storage_kind: {kind}")
+    if not user_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Pack creation requires X-MFM-Drive-Token (Google Drive access token).",
+        )
 
     # Produce seed bytes — from clone or from Model extract
     if body.clone_from_id:
@@ -203,34 +207,47 @@ async def create_scenario(
         if not src_doc.exists:
             raise HTTPException(status_code=404, detail="Source AssumptionPack not found")
         src = src_doc.to_dict()
-        src_store = pack_store.store_for_scenario(src)
-        seed_bytes = src_store.read_bytes(src, user_access_token=user_token)
+        seed_bytes = pack_store.load_pack_bytes_compat(src, user_token=user_token)
     else:
-        # Sprint UX-01 fix: use compat loader so Drive-backed Models also work
-        model_bytes = pack_store.load_model_bytes_compat(model)
+        model_bytes = pack_store.load_model_bytes_compat(model, user_token=user_token)
         seed_bytes = excel_template_engine.extract_scenario_from_template(model_bytes)
 
     doc_ref = _scn_ref(project_id).document()
     project_code = storage_service.safe_name(proj.get("code_name") or proj.get("name", ""), fallback="project")
     scenario_code = storage_service.safe_name(body.code_name or body.name, fallback=doc_ref.id)
 
-    # Store the bytes in the chosen backend
-    store = pack_store.get_store(kind)
-    existing_ctx: dict[str, Any] = {}
-    if kind == pack_store.STORAGE_KIND_DRIVE_XLSX:
-        folders = _resolve_drive_folders(project_id, proj, project_code, user_token)
-        existing_ctx["drive_folder_id"] = folders["inputs"]
-    filename = f"{project_code}_{scenario_code}.xlsx"
-    storage_fields = store.write_bytes(
-        project_code=project_code,
-        scenario_code=scenario_code,
-        kind_label="inputs",
-        version=1,
-        filename=filename,
-        content=seed_bytes,
-        existing=existing_ctx,
-        user_access_token=user_token,
+    # Sprint G1: build the new Drive folder hierarchy
+    root = _drive_root_folder_id()
+    if not root:
+        raise HTTPException(status_code=400, detail="No Drive root folder configured.")
+
+    # Resolve workspace_code from the project's workspace_id
+    ws_code = "default"
+    ws_id = proj.get("workspace_id")
+    if ws_id:
+        ws_snap = (
+            get_firestore_client()
+            .collection(f"{settings.firestore_collection_prefix}workspaces")
+            .document(ws_id)
+            .get()
+        )
+        if ws_snap.exists:
+            ws_code = (ws_snap.to_dict() or {}).get("code_name", "default")
+
+    ws_folders = drive_service.ensure_workspace_folders(root, ws_code, user_access_token=user_token)
+    proj_folders = drive_service.ensure_project_folder_v2(
+        ws_folders["projects"], project_code, user_access_token=user_token
     )
+    pack_folder_id = drive_service.ensure_pack_folder(
+        proj_folders["packs"], scenario_code, user_access_token=user_token
+    )
+
+    filename = drive_service.versioned_filename(scenario_code, 1, ext="xlsx")
+    drive_file_id = drive_service.upload_file(
+        pack_folder_id, filename, seed_bytes, pack_store.XLSX_MIME, user_access_token=user_token,
+    )
+    if not drive_file_id:
+        raise HTTPException(status_code=500, detail="Drive upload failed")
 
     now = datetime.now(UTC)
     data: dict[str, Any] = {
@@ -242,11 +259,15 @@ async def create_scenario(
         "archived": False,
         "version": 1,
         "last_run": None,
+        "storage_kind": pack_store.STORAGE_KIND_DRIVE_XLSX,
+        "storage_path": None,
+        "drive_folder_id": pack_folder_id,
+        "drive_file_id": drive_file_id,
+        "size_bytes": len(seed_bytes),
         "created_by": current_user["uid"],
         "created_by_email": current_user.get("email", ""),
         "created_at": now,
         "updated_at": now,
-        **storage_fields,
     }
     doc_ref.set(data)
     return _to_scenario(doc_ref.id, data)
@@ -374,33 +395,46 @@ async def upload_scenario_file(
     if not classes["input_tabs"]:
         raise HTTPException(status_code=400, detail="Uploaded file has no I_ tabs.")
 
+    if not user_token:
+        raise HTTPException(
+            status_code=400,
+            detail="Pack upload requires X-MFM-Drive-Token (Google Drive access token).",
+        )
+
+    # Sprint G1: each upload creates a NEW versioned file in the pack folder.
+    # Old versions stay accessible — that's the version history.
     new_version = scn.get("version", 1) + 1
-    proj_doc = _proj_ref(project_id).get()
-    proj = proj_doc.to_dict() if proj_doc.exists else {}
-    project_code = storage_service.safe_name(proj.get("code_name") or proj.get("name", ""), fallback=project_id)
     scenario_code = scn.get("code_name", "scenario")
-    filename = file.filename or f"{project_code}_{scenario_code}.xlsx"
+    filename = drive_service.versioned_filename(scenario_code, new_version, ext="xlsx")
 
-    store = pack_store.store_for_scenario(scn)
-    existing_ctx: dict[str, Any] = {}
-    if store.kind == pack_store.STORAGE_KIND_DRIVE_XLSX:
-        folders = _resolve_drive_folders(project_id, proj, project_code, user_token)
-        existing_ctx = {
-            "drive_folder_id": folders["inputs"],
-            "drive_file_id": scn.get("drive_file_id"),
-        }
-    storage_fields = store.write_bytes(
-        project_code=project_code,
-        scenario_code=scenario_code,
-        kind_label="inputs",
-        version=new_version,
-        filename=filename,
-        content=new_content,
-        existing=existing_ctx,
-        user_access_token=user_token,
-    )
+    pack_folder_id = scn.get("drive_folder_id")
+    if not pack_folder_id:
+        # Legacy pack without folder — fall back to update_file_content on the existing file
+        # (back-compat for old packs created before Sprint G1)
+        if not scn.get("drive_file_id"):
+            raise HTTPException(
+                status_code=400,
+                detail="Pack has no drive_folder_id and no drive_file_id — cannot upload.",
+            )
+        drive_service.update_file_content(
+            scn["drive_file_id"], new_content, mime_type=pack_store.XLSX_MIME,
+            user_access_token=user_token,
+        )
+        new_drive_file_id = scn["drive_file_id"]
+    else:
+        new_drive_file_id = drive_service.upload_file(
+            pack_folder_id, filename, new_content, pack_store.XLSX_MIME,
+            user_access_token=user_token,
+        )
+        if not new_drive_file_id:
+            raise HTTPException(status_code=500, detail="Drive upload failed")
 
-    updates = {**storage_fields, "version": new_version, "updated_at": datetime.now(UTC)}
+    updates = {
+        "version": new_version,
+        "drive_file_id": new_drive_file_id,  # latest file id (older versions stay in folder)
+        "size_bytes": len(new_content),
+        "updated_at": datetime.now(UTC),
+    }
     doc_ref.update(updates)
     return _to_scenario(scenario_id, {**scn, **updates})
 

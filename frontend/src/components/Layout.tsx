@@ -5,6 +5,13 @@ import { api } from '../services/api'
 
 interface NavProject { id: string; name: string; code_name: string }
 interface NavPack { id: string; name: string }
+interface NavWorkspace {
+  id: string
+  name: string
+  code_name: string
+  member_count: number
+  drive_folder_url: string | null
+}
 
 /**
  * Sprint B Layout — clean nav. Legacy TGV nav removed.
@@ -18,10 +25,15 @@ function Layout({ children }: { children: React.ReactNode }) {
   const [projects, setProjects] = useState<NavProject[]>([])
   const [packs, setPacks] = useState<Record<string, NavPack[]>>({})
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [workspace, setWorkspace] = useState<NavWorkspace | null>(null)
 
   const isActive = (path: string) => location.pathname === path
 
   useEffect(() => {
+    // Sprint G1: load default workspace (auto-creates if user has none)
+    api.get<NavWorkspace>('/workspaces/me/default')
+      .then(setWorkspace)
+      .catch(() => setWorkspace(null))
     api.get<NavProject[]>('/projects').then(setProjects).catch(() => {})
   }, [])
 
@@ -50,6 +62,29 @@ function Layout({ children }: { children: React.ReactNode }) {
       <aside className="flex w-60 flex-shrink-0 flex-col border-r bg-gray-900 text-white">
         <div className="border-b border-gray-700 px-4 py-4">
           <Link to="/projects" className="text-lg font-bold">MastekoFM</Link>
+          {/* Sprint G1: workspace context */}
+          {workspace && (
+            <div className="mt-2 rounded bg-gray-800 px-2 py-1.5 text-xs">
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate text-gray-300" title={workspace.name}>
+                  🏢 {workspace.name}
+                </span>
+                <span className="text-[10px] text-gray-500">
+                  {workspace.member_count}👤
+                </span>
+              </div>
+              {workspace.drive_folder_url && (
+                <a
+                  href={workspace.drive_folder_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-1 block text-[10px] text-gray-500 hover:text-gray-300"
+                >
+                  📁 Open in Drive
+                </a>
+              )}
+            </div>
+          )}
         </div>
 
         <nav className="flex-1 overflow-y-auto px-2 py-3 text-sm">

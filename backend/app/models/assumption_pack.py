@@ -44,7 +44,9 @@ class AssumptionPackResponse(BaseModel):
     archived: bool = False            # Sprint UX-01: explicit boolean
     storage_kind: str = "drive_xlsx"  # Sprint UX-01: default Drive (post-Sprint-B)
     storage_path: str | None = None   # GCS path when storage_kind=gcs
-    drive_file_id: str | None = None  # Drive file id when storage_kind=drive_xlsx
+    drive_folder_id: str | None = None  # Sprint G1: per-pack folder
+    drive_folder_url: str | None = None  # Sprint G1: derived URL
+    drive_file_id: str | None = None  # latest version's file id
     edit_url: str | None = None       # URL to open in Sheets / download, chosen per store
     size_bytes: int
     version: int                      # increments on every inputs-file replacement

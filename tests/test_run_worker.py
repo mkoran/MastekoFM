@@ -59,7 +59,8 @@ def _wire(
     pack_ref = _doc_ref_with(_snap({
         "name": "P", "code_name": "p", "version": 1, "drive_file_id": "drive-pack",
     }))
-    settings_ref = _doc_ref_with(_snap(None, exists=False))
+    # Sprint G1: settings doc with drive_root_folder_id so the worker enters the Drive branch
+    settings_ref = _doc_ref_with(_snap({"drive_root_folder_id": "ROOT-TEST"}))
 
     # Project doc has a sub-collection for assumption_packs
     proj_subcol = MagicMock()
@@ -96,13 +97,19 @@ def test_idempotent_skip_when_already_completed(mock_db):
     assert updates == []  # no writes — skipped
 
 
-@patch(PATCH_UPLOAD, return_value="https://example/out.xlsx")
+@patch("backend.app.routers._run_worker.drive_service.upload_file", return_value="drive-out-1")
+@patch("backend.app.routers._run_worker.drive_service.ensure_run_folder", return_value="run-folder-id")
+@patch("backend.app.routers._run_worker.drive_service.ensure_project_folder_v2",
+       return_value={"project": "p", "packs": "packs", "runs": "runs-fold"})
+@patch("backend.app.routers._run_worker.drive_service.ensure_workspace_folders",
+       return_value={"workspace": "ws", "models": "m", "output_templates": "t", "projects": "proj-fold"})
 @patch(PATCH_EXEC, return_value={"output_bytes": b"o", "warnings": []})
 @patch(PATCH_LOAD_TPL, return_value=b"t")
 @patch(PATCH_LOAD_PACK, return_value=b"p")
 @patch(PATCH_LOAD_MODEL, return_value=b"m")
 @patch(PATCH_DB)
 def test_happy_path_runs_executor_and_writes_completed(mock_db, *_):
+    """Sprint G1: outputs land in a per-run Drive folder, not GCS."""
     initial = {
         "status": "pending",
         "project_id": "p", "model_id": "m",
@@ -112,19 +119,30 @@ def test_happy_path_runs_executor_and_writes_completed(mock_db, *_):
     updates = []
     _wire(mock_db, initial_run=initial, captured_updates=updates)
 
-    result = _run_worker.execute_run_by_id("run-x", drive_token=None)
+    # drive_token must be present for the Drive output flow to engage
+    result = _run_worker.execute_run_by_id("run-x", drive_token="user-tok")
     assert result["status"] == "completed"
-    assert result["output_download_url"] == "https://example/out.xlsx"
+    # Sprint G1: outputs are now in Drive
+    assert result["output_drive_file_id"] == "drive-out-1"
+    assert result["output_folder_id"] == "run-folder-id"
+    assert len(result["output_artifacts"]) == 1
+    assert result["output_artifacts"][0]["format"] == "xlsx"
     # First update marks running (with attempts=1), second marks completed.
     statuses = [u.get("status") for u in updates if "status" in u]
     assert statuses == ["running", "completed"]
     assert updates[0]["attempts"] == 1
     # Drive token cleared on terminal status (no longer needed).
     assert updates[-1]["drive_token"] is None
+    assert updates[-1]["drive_token_encrypted"] is None
 
 
+@patch("backend.app.routers._run_worker.drive_service.upload_file", return_value="drive-out-2")
+@patch("backend.app.routers._run_worker.drive_service.ensure_run_folder", return_value="run-folder-id")
+@patch("backend.app.routers._run_worker.drive_service.ensure_project_folder_v2",
+       return_value={"project": "p", "packs": "packs", "runs": "runs-fold"})
+@patch("backend.app.routers._run_worker.drive_service.ensure_workspace_folders",
+       return_value={"workspace": "ws", "models": "m", "output_templates": "t", "projects": "proj-fold"})
 @patch("backend.app.routers._run_worker.secrets_svc.decrypt", return_value="decrypted-token-xyz")
-@patch(PATCH_UPLOAD, return_value="https://example/out.xlsx")
 @patch(PATCH_EXEC, return_value={"output_bytes": b"o", "warnings": []})
 @patch(PATCH_LOAD_TPL, return_value=b"t")
 @patch(PATCH_LOAD_PACK, return_value=b"p")

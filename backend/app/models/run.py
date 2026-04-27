@@ -88,6 +88,9 @@ class RunResponse(BaseModel):
     output_storage_path: str | None = None
     output_download_url: str | None = None
     output_drive_file_id: str | None = None
+    output_folder_id: str | None = None       # Sprint G1: per-run Drive folder
+    output_folder_url: str | None = None      # Sprint G1: derived URL
+    output_artifacts: list[dict] = []         # Sprint G1: [{format, drive_file_id, download_url, size_bytes}, ...]
     warnings: list[str] = []
     error: str | None = None
 

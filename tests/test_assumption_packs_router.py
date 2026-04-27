@@ -101,92 +101,32 @@ def test_create_pack_returns_400_when_project_has_no_default_model(mock_db):
     assert "default Model" in resp.json()["detail"]
 
 
+@patch("backend.app.routers.assumption_packs.drive_service.upload_file", return_value="drive-pack-1")
+@patch("backend.app.routers.assumption_packs.drive_service.ensure_pack_folder", return_value="pack-fold")
+@patch("backend.app.routers.assumption_packs.drive_service.ensure_project_folder_v2",
+       return_value={"project": "p", "packs": "packs", "runs": "runs"})
+@patch("backend.app.routers.assumption_packs.drive_service.ensure_workspace_folders",
+       return_value={"workspace": "w", "models": "m", "output_templates": "t", "projects": "proj"})
 @patch(PATCH_DB)
-def test_create_pack_legacy_template_id_field_still_works(mock_db):
-    """Belt-and-suspenders: an un-migrated Project with only `template_id` still works."""
+def test_create_pack_post_sprint_b_default_model_id_works(
+    mock_db, mock_ws, mock_proj, mock_pack_folder, mock_upload
+):
+    """Sprint G1: pack creation goes to Drive in {ws}/Projects/{p}/AssumptionPacks/{pack}/."""
     mock_client = MagicMock()
     mock_db.return_value = mock_client
 
     proj_doc = MagicMock()
     proj_doc.exists = True
-    proj_doc.to_dict.return_value = {
-        "name": "Legacy",
-        "code_name": "legacy",
-        "template_id": "model-legacy",  # old field, no default_model_id
-    }
+    proj_doc.to_dict.return_value = {**_project_with_default_model("m1"), "workspace_id": "ws-1"}
     model_doc = MagicMock()
     model_doc.exists = True
-    model_doc.to_dict.return_value = _gcs_model()
-
+    model_doc.to_dict.return_value = _drive_model()  # Drive-backed model
+    ws_doc = MagicMock()
+    ws_doc.exists = True
+    ws_doc.to_dict.return_value = {"code_name": "personal"}
     settings_doc = MagicMock()
     settings_doc.exists = True
-    settings_doc.to_dict.return_value = {"default_scenario_storage_kind": "gcs"}
-
-    new_pack_ref = MagicMock()
-    new_pack_ref.id = "pack-legacy"
-
-    def collection_side_effect(name):
-        col = MagicMock()
-        if name.endswith("projects"):
-            doc_obj = MagicMock()
-            doc_obj.get.return_value = proj_doc
-            sub = MagicMock()
-            sub.document.return_value = new_pack_ref
-            doc_obj.collection.return_value = sub
-            col.document.return_value = doc_obj
-        elif name.endswith("models"):
-            doc_obj = MagicMock()
-            doc_obj.get.return_value = model_doc
-            col.document.return_value = doc_obj
-        elif name.endswith("settings"):
-            doc_obj = MagicMock()
-            doc_obj.get.return_value = settings_doc
-            col.document.return_value = doc_obj
-        return col
-
-    mock_client.collection.side_effect = collection_side_effect
-
-    with patch(PATCH_LOAD_MODEL, return_value=_tiny_xlsx_bytes()), \
-         patch(PATCH_EXTRACT, return_value=_tiny_xlsx_bytes()), \
-         patch(PATCH_GET_STORE) as mock_get_store, \
-         patch(PATCH_UPLOAD_XLSX, return_value="https://example/x.xlsx"):
-        store = MagicMock()
-        store.kind = "gcs"
-        store.write_bytes.return_value = {
-            "storage_kind": "gcs",
-            "storage_path": "p",
-            "drive_file_id": None,
-            "size_bytes": 100,
-        }
-        store.open_url.return_value = "https://example/x.xlsx"
-        mock_get_store.return_value = store
-
-        resp = client.post(
-            "/api/projects/proj-legacy/assumption-packs",
-            json={"name": "s1", "storage_kind": "gcs"},
-            headers=AUTH,
-        )
-    assert resp.status_code == 201, resp.text
-    assert resp.json()["name"] == "s1"
-
-
-@patch(PATCH_DB)
-def test_create_pack_post_sprint_b_default_model_id_works(mock_db):
-    """UX-01-01 fix: the canonical post-Sprint-B field path returns 201."""
-    mock_client = MagicMock()
-    mock_db.return_value = mock_client
-
-    proj_doc = MagicMock()
-    proj_doc.exists = True
-    proj_doc.to_dict.return_value = _project_with_default_model("m1")
-    model_doc = MagicMock()
-    model_doc.exists = True
-    model_doc.to_dict.return_value = _gcs_model()
-
-    settings_doc = MagicMock()
-    settings_doc.exists = True
-    settings_doc.to_dict.return_value = {"default_scenario_storage_kind": "gcs"}
-
+    settings_doc.to_dict.return_value = {"drive_root_folder_id": "ROOT"}
     new_pack_ref = MagicMock()
     new_pack_ref.id = "pack-new"
 
@@ -200,38 +140,30 @@ def test_create_pack_post_sprint_b_default_model_id_works(mock_db):
             doc_obj.collection.return_value = sub
             col.document.return_value = doc_obj
         elif name.endswith("models"):
-            doc_obj = MagicMock()
-            doc_obj.get.return_value = model_doc
-            col.document.return_value = doc_obj
+            col.document.return_value.get.return_value = model_doc
+        elif name.endswith("workspaces"):
+            col.document.return_value.get.return_value = ws_doc
         elif name.endswith("settings"):
-            doc_obj = MagicMock()
-            doc_obj.get.return_value = settings_doc
-            col.document.return_value = doc_obj
+            col.document.return_value.get.return_value = settings_doc
         return col
 
     mock_client.collection.side_effect = collection_side_effect
 
     with patch(PATCH_LOAD_MODEL, return_value=_tiny_xlsx_bytes()), \
-         patch(PATCH_EXTRACT, return_value=_tiny_xlsx_bytes()), \
-         patch(PATCH_GET_STORE) as mock_get_store, \
-         patch(PATCH_UPLOAD_XLSX, return_value="https://example/x.xlsx"):
-        store = MagicMock()
-        store.kind = "gcs"
-        store.write_bytes.return_value = {
-            "storage_kind": "gcs",
-            "storage_path": "p",
-            "drive_file_id": None,
-            "size_bytes": 100,
-        }
-        store.open_url.return_value = "https://example/x.xlsx"
-        mock_get_store.return_value = store
-
+         patch(PATCH_EXTRACT, return_value=_tiny_xlsx_bytes()):
         resp = client.post(
             "/api/projects/proj-1/assumption-packs",
-            json={"name": "s1", "storage_kind": "gcs"},
-            headers=AUTH,
+            json={"name": "s1"},
+            headers={**AUTH, "X-MFM-Drive-Token": "tok"},
         )
     assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["name"] == "s1"
+    assert body["drive_folder_id"] == "pack-fold"
+    assert body["drive_file_id"] == "drive-pack-1"
+    # Drive upload must use the canonical versioned filename
+    args, _ = mock_upload.call_args
+    assert args[1] == "s1_v001.xlsx"
 
 
 # ── UX-01-02: Calculate regression ───────────────────────────────────────────

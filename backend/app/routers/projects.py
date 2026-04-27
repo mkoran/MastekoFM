@@ -34,9 +34,34 @@ def _model_ref():
     return get_firestore_client().collection(f"{prefix}models")
 
 
+def _ws_ref():
+    prefix = settings.firestore_collection_prefix
+    return get_firestore_client().collection(f"{prefix}workspaces")
+
+
 def _runs_ref():
     prefix = settings.firestore_collection_prefix
     return get_firestore_client().collection(f"{prefix}runs")
+
+
+def _resolve_workspace_id(uid: str, requested_ws_id: str | None) -> tuple[str | None, str | None]:
+    """Sprint G1: pick the workspace_id for a new project.
+
+    If the caller passed one, validate it exists. Otherwise find the user's
+    first workspace (membership). Returns (workspace_id, workspace_name) or
+    (None, None) if no workspace is available — back-compat with old projects.
+    """
+    if requested_ws_id:
+        snap = _ws_ref().document(requested_ws_id).get()
+        if not snap.exists:
+            raise HTTPException(status_code=404, detail=f"Workspace {requested_ws_id} not found")
+        d = snap.to_dict()
+        return requested_ws_id, d.get("name")
+    # Fall back to user's first workspace
+    for doc in _ws_ref().where("members", "array_contains", uid).limit(1).stream():
+        d = doc.to_dict()
+        return doc.id, d.get("name")
+    return None, None
 
 
 def _pack_subref(project_id: str):
@@ -62,6 +87,8 @@ def _to_response(doc_id: str, data: dict[str, Any]) -> ProjectResponse:
         name=data.get("name", ""),
         code_name=data.get("code_name", ""),
         description=data.get("description", ""),
+        workspace_id=data.get("workspace_id"),
+        workspace_name=data.get("workspace_name"),
         default_model_id=data.get("default_model_id"),
         default_model_name=data.get("default_model_name"),
         default_model_version=data.get("default_model_version"),
@@ -88,6 +115,9 @@ async def create_project(body: ProjectCreate, current_user: CurrentUser):
         default_model_name = md.get("name")
         default_model_version = md.get("version", 1)
 
+    # Sprint G1: resolve workspace
+    ws_id, ws_name = _resolve_workspace_id(current_user["uid"], body.workspace_id)
+
     now = datetime.now(UTC)
     doc_ref = _ref().document()
     safe_code = storage_service.safe_name(body.code_name or body.name, fallback=doc_ref.id)
@@ -95,6 +125,8 @@ async def create_project(body: ProjectCreate, current_user: CurrentUser):
         "name": body.name,
         "code_name": safe_code,
         "description": body.description,
+        "workspace_id": ws_id,
+        "workspace_name": ws_name,
         "default_model_id": body.default_model_id,
         "default_model_name": default_model_name,
         "default_model_version": default_model_version,
@@ -113,8 +145,10 @@ async def create_project(body: ProjectCreate, current_user: CurrentUser):
 async def list_projects(
     current_user: CurrentUser,
     include_archived: bool = Query(default=False),
+    workspace_id: str | None = Query(default=None, description="Sprint G1: filter to a single workspace"),
 ):
     """Sprint UX-01: hides archived projects by default; pass ?include_archived=true to see them.
+    Sprint G1: optional workspace_id filter.
 
     Each summary now includes run_count, last_run_at, last_run_status, created_by_email,
     drive_folder_url. Last-run is computed via a single per-project query (acceptable
@@ -122,7 +156,10 @@ async def list_projects(
     """
     out: list[ProjectSummary] = []
     runs_collection = _runs_ref()
-    for doc in _ref().stream():
+    q = _ref()
+    if workspace_id:
+        q = q.where("workspace_id", "==", workspace_id)
+    for doc in q.stream():
         data = doc.to_dict()
         if not include_archived and _is_archived(data):
             continue
@@ -142,6 +179,8 @@ async def list_projects(
             id=doc.id,
             name=data.get("name", ""),
             code_name=data.get("code_name", ""),
+            workspace_id=data.get("workspace_id"),
+            workspace_name=data.get("workspace_name"),
             default_model_id=data.get("default_model_id"),
             default_model_name=data.get("default_model_name"),
             status=data.get("status", "active"),

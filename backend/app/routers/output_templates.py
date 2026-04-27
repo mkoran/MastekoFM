@@ -41,21 +41,41 @@ def _drive_root_id() -> str:
     return _settings_doc().get("drive_root_folder_id") or settings.drive_root_folder_id
 
 
-def _ensure_template_folder(user_token: str | None) -> str:
-    """Return the Drive folder id for OutputTemplates, creating idempotently."""
+def _resolve_workspace_code(uid: str, ws_id_hint: str | None) -> str:
+    """Sprint G1: pick a workspace code for new OutputTemplate uploads."""
+    db = get_firestore_client()
+    if ws_id_hint:
+        snap = db.collection(f"{settings.firestore_collection_prefix}workspaces").document(ws_id_hint).get()
+        if snap.exists:
+            return (snap.to_dict() or {}).get("code_name", "default")
+    for doc in (
+        db.collection(f"{settings.firestore_collection_prefix}workspaces")
+        .where("members", "array_contains", uid).limit(1).stream()
+    ):
+        return (doc.to_dict() or {}).get("code_name", "default")
+    raise HTTPException(
+        status_code=400,
+        detail="No workspace available. Create one first via POST /api/workspaces.",
+    )
+
+
+def _ensure_template_folder(ws_code: str, tpl_code: str, user_token: str | None) -> str:
+    """Sprint G1: per-template folder under {ws}/OutputTemplates/{tpl_code}/."""
     root = _drive_root_id()
     if not root:
         raise HTTPException(
             status_code=400,
-            detail="No Drive root folder configured. Set one in Settings before uploading OutputTemplates.",
+            detail="No Drive root folder configured. Set one in Settings.",
         )
     if not user_token:
         raise HTTPException(
             status_code=400,
-            detail="OutputTemplate upload requires a Google Sign-In access token. Sign in with Google.",
+            detail="OutputTemplate upload requires a Google Sign-In access token.",
         )
-    mfm = drive_service.find_or_create_folder("MastekoFM", root, user_token)
-    return drive_service.find_or_create_folder("OutputTemplates", mfm, user_token)
+    ws_folders = drive_service.ensure_workspace_folders(root, ws_code, user_access_token=user_token)
+    return drive_service.ensure_output_template_folder(
+        ws_folders["output_templates"], tpl_code, user_access_token=user_token,
+    )
 
 
 def _is_archived(data: dict[str, Any]) -> bool:
@@ -151,12 +171,13 @@ async def upload_output_template(
     if errors:
         raise HTTPException(status_code=400, detail="; ".join(errors))
 
-    # Upload to Drive
+    # Sprint G1: per-template folder + versioned filename
     user_token = request.headers.get("X-MFM-Drive-Token")
-    folder_id = _ensure_template_folder(user_token)
     doc_ref = _ref().document()
     safe_code = storage_service.safe_name(code_name or name, fallback=doc_ref.id)
-    filename = file.filename or f"{safe_code}.xlsx"
+    ws_code = _resolve_workspace_code(current_user["uid"], None)
+    folder_id = _ensure_template_folder(ws_code, safe_code, user_token)
+    filename = drive_service.versioned_filename(safe_code, 1, ext="xlsx")
 
     drive_file_id = drive_service.upload_file(
         folder_id, filename, content, XLSX_MIME, user_access_token=user_token
@@ -173,6 +194,7 @@ async def upload_output_template(
         "version": 1,
         "storage_kind": "drive_xlsx",
         "storage_path": None,
+        "drive_folder_id": folder_id,
         "drive_file_id": drive_file_id,
         "m_tabs": classes["m_tabs"],
         "output_tabs": classes["output_tabs"],

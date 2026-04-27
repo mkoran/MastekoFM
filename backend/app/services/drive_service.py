@@ -153,19 +153,132 @@ def ensure_project_folders(
     project_code: str,
     user_access_token: str | None = None,
 ) -> dict[str, str]:
-    """Ensure the Drive folder layout exists for a project.
+    """LEGACY (Sprint B layout) — Ensure flat <root>/MastekoFM/<project>/{Inputs,Outputs}/.
 
-    Creates (idempotently):
-      <root>/MastekoFM/<project_code>/Inputs/
-      <root>/MastekoFM/<project_code>/Outputs/
-
-    Returns {"project": id, "inputs": id, "outputs": id}.
+    Kept for back-compat with existing data only. New code uses the workspace
+    layout: see ensure_workspace_folders + ensure_pack_folder + ensure_run_folder.
     """
     mfm = find_or_create_folder("MastekoFM", root_folder_id, user_access_token)
     proj = find_or_create_folder(project_code, mfm, user_access_token)
     inputs = find_or_create_folder("Inputs", proj, user_access_token)
     outputs = find_or_create_folder("Outputs", proj, user_access_token)
     return {"project": proj, "inputs": inputs, "outputs": outputs}
+
+
+# ── Sprint G1 — versioned filename + workspace folder layout ─────────────────
+
+
+def versioned_filename(code: str, version: int, ext: str = "xlsx") -> str:
+    """Sprint G1: canonical filename encoding.
+
+    Every artifact lives at `{code}_v{NNN}.{ext}` where NNN is zero-padded.
+    Sortable by name = sortable by version = sortable by upload time
+    (since versions bump monotonically with time).
+
+    Examples:
+      versioned_filename("helloworld_inputs", 1)        → "helloworld_inputs_v001.xlsx"
+      versioned_filename("campus_adele_model", 27)      → "campus_adele_model_v027.xlsx"
+      versioned_filename("output", 1, ext="pdf")        → "output_v001.pdf"
+    """
+    if version < 1:
+        raise ValueError(f"version must be >= 1, got {version}")
+    return f"{code}_v{version:03d}.{ext}"
+
+
+def run_folder_name(started_at_utc, pack_code: str, tpl_code: str) -> str:
+    """Sprint G1: per-run folder name `{YYYYMMDD-HHMMSS}_{pack}_{tpl}`."""
+    ts = started_at_utc.strftime("%Y%m%d-%H%M%S")
+    return f"{ts}_{pack_code}_{tpl_code}"
+
+
+def ensure_workspace_folders(
+    root_folder_id: str,
+    workspace_code: str,
+    user_access_token: str | None = None,
+) -> dict[str, str]:
+    """Sprint G1: ensure the workspace layout exists.
+
+    Creates (idempotent):
+      <root>/MastekoFM/Workspaces/<ws_code>/
+                                      ├── Models/
+                                      ├── OutputTemplates/
+                                      └── Projects/
+
+    Returns {"workspace": id, "models": id, "output_templates": id, "projects": id}.
+    """
+    mfm = find_or_create_folder("MastekoFM", root_folder_id, user_access_token)
+    workspaces = find_or_create_folder("Workspaces", mfm, user_access_token)
+    ws = find_or_create_folder(workspace_code, workspaces, user_access_token)
+    models = find_or_create_folder("Models", ws, user_access_token)
+    tpls = find_or_create_folder("OutputTemplates", ws, user_access_token)
+    projects = find_or_create_folder("Projects", ws, user_access_token)
+    return {
+        "workspace": ws,
+        "models": models,
+        "output_templates": tpls,
+        "projects": projects,
+    }
+
+
+def ensure_model_folder(
+    models_folder_id: str,
+    model_code: str,
+    user_access_token: str | None = None,
+) -> str:
+    """Sprint G1: per-Model folder under workspace's Models/."""
+    return find_or_create_folder(model_code, models_folder_id, user_access_token)
+
+
+def ensure_output_template_folder(
+    output_templates_folder_id: str,
+    tpl_code: str,
+    user_access_token: str | None = None,
+) -> str:
+    """Sprint G1: per-OutputTemplate folder under workspace's OutputTemplates/."""
+    return find_or_create_folder(tpl_code, output_templates_folder_id, user_access_token)
+
+
+def ensure_project_folder_v2(
+    projects_folder_id: str,
+    project_code: str,
+    user_access_token: str | None = None,
+) -> dict[str, str]:
+    """Sprint G1: per-Project folder under workspace's Projects/, with subfolders.
+
+    Creates:
+      <projects>/<project_code>/
+                      ├── AssumptionPacks/
+                      └── Runs/
+    """
+    proj = find_or_create_folder(project_code, projects_folder_id, user_access_token)
+    packs = find_or_create_folder("AssumptionPacks", proj, user_access_token)
+    runs = find_or_create_folder("Runs", proj, user_access_token)
+    return {"project": proj, "packs": packs, "runs": runs}
+
+
+def ensure_pack_folder(
+    packs_folder_id: str,
+    pack_code: str,
+    user_access_token: str | None = None,
+) -> str:
+    """Sprint G1: per-AssumptionPack folder."""
+    return find_or_create_folder(pack_code, packs_folder_id, user_access_token)
+
+
+def ensure_run_folder(
+    runs_folder_id: str,
+    folder_name: str,
+    user_access_token: str | None = None,
+) -> str:
+    """Sprint G1: per-Run folder under project's Runs/. Use run_folder_name() for the name."""
+    return find_or_create_folder(folder_name, runs_folder_id, user_access_token)
+
+
+def folder_url(folder_id: str | None) -> str | None:
+    """Convenience: build a Drive folder web URL from an id."""
+    if not folder_id:
+        return None
+    return f"https://drive.google.com/drive/folders/{folder_id}"
 
 
 def list_files(folder_id: str, user_access_token: str | None = None) -> list[dict]:
