@@ -295,3 +295,49 @@ def list_files(folder_id: str, user_access_token: str | None = None) -> list[dic
     except Exception:
         logger.exception("Failed to list files in folder '%s'", folder_id)
         return []
+
+
+def list_versioned_files(
+    folder_id: str,
+    code: str,
+    user_access_token: str | None = None,
+) -> list[dict]:
+    """Sprint G2: list versioned artifacts in an entity's folder.
+
+    Returns one entry per file matching `{code}_v{NNN}.*` in the folder, with
+    parsed version + Drive metadata. Sorted descending by version (newest first).
+
+    Returns: [{version: int, file_id: str, name: str, ext: str,
+               size_bytes: int|None, modified_time: str,
+               edit_url: str, download_url: str}, ...]
+    """
+    files = list_files(folder_id, user_access_token=user_access_token)
+    out: list[dict] = []
+    prefix = f"{code}_v"
+    for f in files:
+        name = f.get("name", "")
+        if not name.startswith(prefix):
+            continue
+        # Parse {code}_v{NNN}.{ext}
+        try:
+            rest = name[len(prefix):]                 # e.g. "001.xlsx" or "027.pdf"
+            version_str, _, ext = rest.partition(".")
+            version = int(version_str)
+        except (ValueError, AttributeError):
+            continue
+        fid = f.get("id")
+        out.append({
+            "version": version,
+            "file_id": fid,
+            "name": name,
+            "ext": ext,
+            "size_bytes": int(f["size"]) if f.get("size") else None,
+            "modified_time": f.get("modifiedTime"),
+            "mime_type": f.get("mimeType"),
+            "edit_url": f"https://docs.google.com/spreadsheets/d/{fid}/edit"
+                if ext == "xlsx" and fid else None,
+            "download_url": f"https://drive.google.com/uc?id={fid}&export=download"
+                if fid else None,
+        })
+    out.sort(key=lambda r: r["version"], reverse=True)
+    return out

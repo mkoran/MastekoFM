@@ -7,6 +7,8 @@ import Layout from './components/Layout'
 import Login from './pages/Login'
 import SettingsPage from './pages/SettingsPage'
 import ModelsPage from './pages/ModelsPage'
+import ModelDetailPage from './pages/ModelDetailPage'
+import WorkspaceSettingsPage from './pages/WorkspaceSettingsPage'
 import ProjectsPage from './pages/ProjectsPage'
 import ProjectView from './pages/ProjectView'
 import OutputTemplatesPage from './pages/OutputTemplatesPage'
@@ -36,6 +38,7 @@ function AppRoutes() {
       <Route path="/projects" element={<P><ProjectsPage /></P>} />
       <Route path="/projects/:projectId" element={<P><ProjectView /></P>} />
       <Route path="/models" element={<P><ModelsPage /></P>} />
+      <Route path="/models/:modelId" element={<P><ModelDetailPage /></P>} />
       <Route path="/output-templates" element={<P><OutputTemplatesPage /></P>} />
       <Route path="/runs" element={<P><RunsPage /></P>} />
       <Route path="/runs/:runId" element={<P><RunDetailPage /></P>} />
@@ -45,6 +48,7 @@ function AppRoutes() {
       <Route path="/tree/projects/:projectId/packs/:packId" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
       <Route path="/tree/projects/:projectId/packs/:packId/:nodeKind" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
       <Route path="/tree/projects/:projectId/packs/:packId/:nodeKind/:tab/:cellRef" element={<ProtectedRoute><TreePage /></ProtectedRoute>} />
+      <Route path="/workspaces/:workspaceId" element={<P><WorkspaceSettingsPage /></P>} />
       <Route path="/settings" element={<P><SettingsPage /></P>} />
     </Routes>
   )

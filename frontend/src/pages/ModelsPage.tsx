@@ -1,11 +1,13 @@
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
 /**
- * Sprint UX-01-15 + UX-01-16: Models page now shows the Model's URL with an
- * "Open in Sheets" button (UX-01-15), and supports inline editing of the
- * underlying Drive file id (UX-01-16). Archive/Unarchive added too.
+ * Sprint G2: each Model row links to its detail page (/models/:id). Drive
+ * folder is surfaced as a 📁 link; "Open in Sheets" still opens the latest
+ * version's xlsx; "📊 Calculations" jumps to /runs?model_id={id} (query view
+ * — no duplicate storage per Marc's decision).
  */
 
 interface ModelSummary {
@@ -17,6 +19,7 @@ interface ModelSummary {
   output_tab_count: number
   calc_tab_count: number
   archived: boolean
+  drive_folder_url: string | null
   drive_url: string | null
   created_by_email: string | null
   created_at: string
@@ -172,7 +175,9 @@ export default function ModelsPage() {
               <th className="px-3 py-2">I_</th>
               <th className="px-3 py-2">O_</th>
               <th className="px-3 py-2">calc</th>
-              <th className="px-3 py-2">URL</th>
+              <th className="px-3 py-2">Drive folder</th>
+              <th className="px-3 py-2">Open</th>
+              <th className="px-3 py-2">Calculations</th>
               <th className="px-3 py-2">Created By</th>
               <th className="px-3 py-2">Updated</th>
               <th className="px-3 py-2">Status</th>
@@ -182,37 +187,47 @@ export default function ModelsPage() {
           <tbody>
             {models.map((t) => (
               <tr key={t.id} className={`border-t ${t.archived ? 'text-gray-400 italic' : ''}`}>
-                <td className="px-3 py-2 font-medium">{t.name}</td>
+                <td className="px-3 py-2 font-medium">
+                  <Link to={`/models/${t.id}`} className="text-blue-600 hover:underline">{t.name}</Link>
+                </td>
                 <td className="px-3 py-2 text-gray-500">{t.code_name}</td>
                 <td className="px-3 py-2">v{t.version}</td>
                 <td className="px-3 py-2">{t.input_tab_count}</td>
                 <td className="px-3 py-2">{t.output_tab_count}</td>
                 <td className="px-3 py-2">{t.calc_tab_count}</td>
+                <td className="px-3 py-2 text-xs">
+                  {t.drive_folder_url ? (
+                    <a href={t.drive_folder_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">📁 Open</a>
+                  ) : '—'}
+                </td>
                 <td className="px-3 py-2">
                   {editing?.id === t.id ? (
                     <div className="flex items-center gap-1">
                       <input
-                        className="w-44 rounded border px-1 py-0.5 text-xs"
+                        className="w-32 rounded border px-1 py-0.5 text-xs"
                         placeholder="drive file id"
                         value={editing.drive_file_id}
                         onChange={(e) => setEditing({ ...editing, drive_file_id: e.target.value })}
                       />
-                      <button onClick={saveEdit} className="rounded bg-blue-600 px-2 py-0.5 text-xs text-white">Save</button>
+                      <button onClick={saveEdit} className="rounded bg-blue-600 px-1 py-0.5 text-xs text-white">✓</button>
                       <button onClick={() => setEditing(null)} className="text-xs text-gray-500">×</button>
                     </div>
                   ) : t.drive_url ? (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-1">
                       <a href={t.drive_url} target="_blank" rel="noreferrer" className="rounded bg-green-600 px-2 py-0.5 text-xs text-white hover:bg-green-700">
-                        Open in Sheets
+                        Sheets
                       </a>
                       <button onClick={() => startEdit(t)} className="text-xs text-blue-600 hover:underline">edit</button>
                     </div>
                   ) : (
-                    <button onClick={() => startEdit(t)} className="text-xs text-blue-600 hover:underline">+ set Drive id</button>
+                    <button onClick={() => startEdit(t)} className="text-xs text-blue-600 hover:underline">+ set</button>
                   )}
                 </td>
+                <td className="px-3 py-2 text-xs">
+                  <Link to={`/runs?model_id=${t.id}`} className="text-blue-600 hover:underline">📊 View</Link>
+                </td>
                 <td className="px-3 py-2 text-xs">{t.created_by_email ?? '—'}</td>
-                <td className="px-3 py-2 text-xs text-gray-500">{new Date(t.updated_at).toLocaleString()}</td>
+                <td className="px-3 py-2 text-xs text-gray-500">{new Date(t.updated_at).toLocaleDateString()}</td>
                 <td className="px-3 py-2">
                   <span className={`rounded px-2 py-0.5 text-xs ${t.archived ? 'bg-gray-100 text-gray-500' : 'bg-green-100 text-green-700'}`}>
                     {t.archived ? 'archived' : 'active'}
@@ -230,7 +245,7 @@ export default function ModelsPage() {
             ))}
             {models.length === 0 && (
               <tr>
-                <td colSpan={11} className="px-3 py-6 text-center text-sm text-gray-500">
+                <td colSpan={13} className="px-3 py-6 text-center text-sm text-gray-500">
                   No Models yet. Upload one above.
                 </td>
               </tr>

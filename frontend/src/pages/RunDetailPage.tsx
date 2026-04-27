@@ -3,6 +3,13 @@ import { Link, useParams } from 'react-router-dom'
 import { api } from '../services/api'
 import { useAuth } from '../contexts/AuthContext'
 
+interface Artifact {
+  format: string  // "xlsx" | "pdf" | "docx" | ...
+  drive_file_id: string | null
+  download_url: string | null
+  size_bytes: number | null
+}
+
 interface RunDetail {
   id: string
   project_id: string
@@ -27,6 +34,9 @@ interface RunDetail {
   output_storage_path: string | null
   output_download_url: string | null
   output_drive_file_id: string | null
+  output_folder_id: string | null
+  output_folder_url: string | null
+  output_artifacts: Artifact[]
   warnings: string[]
   error: string | null
   triggered_by: string
@@ -181,16 +191,57 @@ export default function RunDetailPage() {
 
         {/* Output */}
         <div className="rounded border bg-white p-4">
-          <h2 className="mb-3 text-sm font-semibold text-gray-700">Output artifact</h2>
+          <h2 className="mb-3 flex items-center justify-between text-sm font-semibold text-gray-700">
+            <span>Output artifacts</span>
+            {/* Sprint G2: prominent Drive folder URL — outputs are folders, not single files */}
+            {run.output_folder_url && (
+              <a
+                href={run.output_folder_url}
+                target="_blank" rel="noreferrer"
+                className="rounded border border-gray-300 px-2 py-0.5 text-xs font-normal text-gray-700 hover:bg-gray-50"
+              >
+                📁 Open Drive folder
+              </a>
+            )}
+          </h2>
+
+          {/* Sprint G2: artifacts list (xlsx / pdf / docx multi-format) */}
+          {run.output_artifacts && run.output_artifacts.length > 0 && (
+            <table className="mb-3 w-full text-xs">
+              <thead className="bg-gray-50 text-left text-gray-600">
+                <tr>
+                  <th className="px-2 py-1">Format</th>
+                  <th className="px-2 py-1">Size</th>
+                  <th className="px-2 py-1"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {run.output_artifacts.map((a, i) => (
+                  <tr key={i} className="border-t">
+                    <td className="px-2 py-1 font-mono uppercase">.{a.format}</td>
+                    <td className="px-2 py-1 text-gray-500">{a.size_bytes != null ? `${Math.round(a.size_bytes / 1024)} KB` : '—'}</td>
+                    <td className="px-2 py-1">
+                      {a.download_url ? (
+                        <a href={a.download_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Download ↓</a>
+                      ) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
           {run.status === 'completed' && run.output_download_url ? (
             <div className="space-y-3">
-              <a
-                href={run.output_download_url}
-                target="_blank" rel="noreferrer"
-                className="inline-block rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
-              >
-                Download .xlsx ↓
-              </a>
+              {(!run.output_artifacts || run.output_artifacts.length === 0) && (
+                <a
+                  href={run.output_download_url}
+                  target="_blank" rel="noreferrer"
+                  className="inline-block rounded bg-blue-600 px-3 py-1.5 text-sm text-white hover:bg-blue-700"
+                >
+                  Download .xlsx ↓
+                </a>
+              )}
               {driveOutputUrl && (
                 <div>
                   <a href={driveOutputUrl} target="_blank" rel="noreferrer" className="text-sm text-blue-600 hover:underline">

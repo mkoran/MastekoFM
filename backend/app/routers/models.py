@@ -266,6 +266,29 @@ async def download_excel_template(template_id: str, current_user: CurrentUser):
     }
 
 
+@router.get("/api/models/{template_id}/revisions")
+async def list_model_revisions(
+    template_id: str, current_user: CurrentUser, request: Request,
+):
+    """Sprint G2: list all versioned files in the Model's Drive folder.
+
+    Returns the version history as separate Drive files (`{code}_v001.xlsx`,
+    `_v002.xlsx`, etc.) with timestamps, sizes, and direct edit/download URLs.
+    Sorted newest version first.
+    """
+    doc = _ref().document(template_id).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="Model not found")
+    data = doc.to_dict()
+    folder_id = data.get("drive_folder_id")
+    code = data.get("code_name") or template_id
+    if not folder_id:
+        return {"model_id": template_id, "revisions": [], "note": "Legacy GCS Model — no Drive folder"}
+    user_token = request.headers.get("X-MFM-Drive-Token")
+    revs = drive_service.list_versioned_files(folder_id, code, user_access_token=user_token)
+    return {"model_id": template_id, "code_name": code, "revisions": revs}
+
+
 @router.post("/api/models/{template_id}/replace", response_model=ModelResponse)
 async def replace_excel_template(
     template_id: str,

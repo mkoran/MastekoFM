@@ -62,17 +62,21 @@ function Layout({ children }: { children: React.ReactNode }) {
       <aside className="flex w-60 flex-shrink-0 flex-col border-r bg-gray-900 text-white">
         <div className="border-b border-gray-700 px-4 py-4">
           <Link to="/projects" className="text-lg font-bold">MastekoFM</Link>
-          {/* Sprint G1: workspace context */}
+          {/* Sprint G1: workspace context. Sprint G2: clickable to settings. */}
           {workspace && (
             <div className="mt-2 rounded bg-gray-800 px-2 py-1.5 text-xs">
-              <div className="flex items-center justify-between gap-2">
-                <span className="truncate text-gray-300" title={workspace.name}>
+              <Link
+                to={`/workspaces/${workspace.id}`}
+                className="flex items-center justify-between gap-2 hover:text-white"
+                title={`${workspace.name} — open settings`}
+              >
+                <span className="truncate text-gray-300">
                   🏢 {workspace.name}
                 </span>
                 <span className="text-[10px] text-gray-500">
                   {workspace.member_count}👤
                 </span>
-              </div>
+              </Link>
               {workspace.drive_folder_url && (
                 <a
                   href={workspace.drive_folder_url}

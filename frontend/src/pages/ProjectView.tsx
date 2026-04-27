@@ -32,6 +32,8 @@ interface AssumptionPackDetail extends AssumptionPackSummary {
   description: string
   storage_kind: 'gcs' | 'drive_xlsx'
   storage_path: string | null
+  drive_folder_id: string | null    // Sprint G1
+  drive_folder_url: string | null   // Sprint G1
   drive_file_id: string | null
   edit_url: string | null
   size_bytes: number
@@ -44,6 +46,17 @@ interface AssumptionPackDetail extends AssumptionPackSummary {
     output_download_url: string
     duration_ms: number
   } | null
+}
+
+interface PackRevision {
+  version: number
+  file_id: string
+  name: string
+  ext: string
+  size_bytes: number | null
+  modified_time: string
+  edit_url: string | null
+  download_url: string | null
 }
 
 interface RunRecord {
@@ -70,6 +83,8 @@ export default function ProjectView() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [selected, setSelected] = useState<AssumptionPackDetail | null>(null)
   const [runs, setRuns] = useState<RunRecord[]>([])
+  const [revisions, setRevisions] = useState<PackRevision[]>([])
+  const [showRevisions, setShowRevisions] = useState(false)
   const [message, setMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null)
   const [calculating, setCalculating] = useState(false)
   const [newName, setNewName] = useState('')
@@ -93,6 +108,10 @@ export default function ProjectView() {
     if (!projectId || !selectedId || !token) return
     api.get<AssumptionPackDetail>(`/projects/${projectId}/assumption-packs/${selectedId}`).then(setSelected).catch(() => setSelected(null))
     api.get<RunRecord[]>(`/projects/${projectId}/assumption-packs/${selectedId}/runs`).then(setRuns).catch(() => setRuns([]))
+    // Sprint G2: pack revision history (versioned files in Drive folder)
+    api.get<{ revisions: PackRevision[] }>(`/projects/${projectId}/assumption-packs/${selectedId}/revisions`)
+      .then((r) => setRevisions(r.revisions || []))
+      .catch(() => setRevisions([]))
   }
   useEffect(loadSelected, [projectId, selectedId, token])
 
@@ -362,6 +381,52 @@ export default function ProjectView() {
                     <div className="text-sm text-gray-500">No calculation yet — click Calculate.</div>
                   )}
                 </div>
+              </div>
+
+              {/* Sprint G2: AssumptionPack revision history (versioned files in Drive) */}
+              <div className="mb-4 rounded border bg-white">
+                <button
+                  onClick={() => setShowRevisions((v) => !v)}
+                  className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                >
+                  <span>📜 Version history ({revisions.length} version{revisions.length === 1 ? '' : 's'} in Drive)</span>
+                  <span className="text-xs text-gray-400">{showRevisions ? '▼' : '▶'}</span>
+                </button>
+                {showRevisions && (
+                  <div className="border-t px-3 py-2">
+                    {revisions.length === 0 ? (
+                      <p className="text-xs text-gray-500">
+                        No versioned files found. {selected?.drive_folder_id ? 'Drive may not be reachable from this session.' : 'Legacy pack without per-pack folder.'}
+                      </p>
+                    ) : (
+                      <table className="w-full text-xs">
+                        <thead className="bg-gray-50 text-left text-gray-600">
+                          <tr>
+                            <th className="px-2 py-1">Version</th>
+                            <th className="px-2 py-1">Filename</th>
+                            <th className="px-2 py-1">Modified</th>
+                            <th className="px-2 py-1">Size</th>
+                            <th className="px-2 py-1"></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {revisions.map((r) => (
+                            <tr key={r.file_id} className="border-t">
+                              <td className="px-2 py-1 font-mono">v{String(r.version).padStart(3, '0')}</td>
+                              <td className="px-2 py-1 font-mono text-gray-600">{r.name}</td>
+                              <td className="px-2 py-1 text-gray-500">{new Date(r.modified_time).toLocaleString()}</td>
+                              <td className="px-2 py-1 text-gray-500">{r.size_bytes != null ? `${Math.round(r.size_bytes / 1024)} KB` : '—'}</td>
+                              <td className="px-2 py-1 space-x-2">
+                                {r.edit_url && <a href={r.edit_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">Open</a>}
+                                {r.download_url && <a href={r.download_url} target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">↓</a>}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                  </div>
+                )}
               </div>
 
               {runs.length > 0 && (

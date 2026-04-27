@@ -321,6 +321,9 @@ async def run_worker(run_id: str, request: Request) -> dict[str, Any]:
 async def list_runs(
     current_user: CurrentUser,
     project_id: str | None = Query(default=None),
+    model_id: str | None = Query(default=None, description="Sprint G2: filter by Model"),
+    assumption_pack_id: str | None = Query(default=None, description="Sprint G2"),
+    output_template_id: str | None = Query(default=None, description="Sprint G2"),
     triggered_by: str | None = Query(default=None, description="Filter by user uid"),
     triggered_by_email: str | None = Query(
         default=None, description="Filter by user email (denormalized on the run)"
@@ -328,13 +331,18 @@ async def list_runs(
     status: str | None = Query(default=None),
     limit: int = Query(default=50),
 ):
-    """Sprint UX-01-14: filter Run history by project, user (uid or email), and status.
-
-    Sorted descending by started_at. Defaults to limit=50; bump explicitly if needed.
+    """Sprint UX-01-14 + G2: filter Run history by project / model / pack /
+    template / user / status. Sorted descending by started_at.
     """
     q = _runs_ref()
     if project_id:
         q = q.where("project_id", "==", project_id)
+    if model_id:
+        q = q.where("model_id", "==", model_id)
+    if assumption_pack_id:
+        q = q.where("assumption_pack_id", "==", assumption_pack_id)
+    if output_template_id:
+        q = q.where("output_template_id", "==", output_template_id)
     if triggered_by:
         q = q.where("triggered_by", "==", triggered_by)
     if triggered_by_email:

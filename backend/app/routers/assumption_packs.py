@@ -351,6 +351,32 @@ async def download_scenario(project_id: str, scenario_id: str, current_user: Cur
     }
 
 
+@router.get("/api/projects/{project_id}/assumption-packs/{scenario_id}/revisions")
+async def list_pack_revisions(
+    project_id: str, scenario_id: str, current_user: CurrentUser, request: Request,
+):
+    """Sprint G2: list all versioned files in the AssumptionPack's Drive folder.
+
+    Returns the full upload history (`{pack_code}_v001.xlsx`, `_v002.xlsx`, ...)
+    with timestamps + sizes + Open-in-Sheets URLs. Sorted newest first.
+    """
+    doc = _scn_ref(project_id).document(scenario_id).get()
+    if not doc.exists:
+        raise HTTPException(status_code=404, detail="AssumptionPack not found")
+    data = doc.to_dict()
+    folder_id = data.get("drive_folder_id")
+    code = data.get("code_name") or scenario_id
+    if not folder_id:
+        return {
+            "pack_id": scenario_id,
+            "revisions": [],
+            "note": "Legacy pack without per-pack folder (created before Sprint G1).",
+        }
+    user_token = request.headers.get("X-MFM-Drive-Token")
+    revs = drive_service.list_versioned_files(folder_id, code, user_access_token=user_token)
+    return {"pack_id": scenario_id, "code_name": code, "revisions": revs}
+
+
 @router.post(
     "/api/projects/{project_id}/assumption-packs/{scenario_id}/upload",
     response_model=AssumptionPackResponse,
