@@ -6,11 +6,15 @@ import { useAuth } from '../contexts/AuthContext'
 interface RunDetail {
   id: string
   project_id: string
+  project_name: string | null
   assumption_pack_id: string
+  assumption_pack_name: string | null
   assumption_pack_version: number
   model_id: string
+  model_name: string | null
   model_version: number
   output_template_id: string
+  output_template_name: string | null
   output_template_version: number
   status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
   started_at: string
@@ -137,27 +141,40 @@ export default function RunDetailPage() {
               <dt className="text-xs font-semibold text-gray-500">
                 <span className="rounded bg-yellow-100 px-1.5 py-0.5 text-yellow-800">Inputs</span>
               </dt>
-              <dd className="mt-1 text-gray-700">{run.assumption_pack_id} <span className="text-xs text-gray-500">v{run.assumption_pack_version}</span></dd>
+              <dd className="mt-1 text-gray-700">
+                {run.assumption_pack_name ?? <code className="text-xs text-gray-400">{run.assumption_pack_id}</code>}{' '}
+                <span className="text-xs text-gray-500">v{run.assumption_pack_version}</span>
+              </dd>
             </div>
             <div>
               <dt className="text-xs font-semibold text-gray-500">
                 <span className="rounded bg-blue-100 px-1.5 py-0.5 text-blue-800">Model</span>
               </dt>
-              <dd className="mt-1 text-gray-700">{run.model_id} <span className="text-xs text-gray-500">v{run.model_version}</span></dd>
+              <dd className="mt-1 text-gray-700">
+                {run.model_name ?? <code className="text-xs text-gray-400">{run.model_id}</code>}{' '}
+                <span className="text-xs text-gray-500">v{run.model_version}</span>
+              </dd>
             </div>
             <div>
               <dt className="text-xs font-semibold text-gray-500">
                 <span className="rounded bg-green-100 px-1.5 py-0.5 text-green-800">OutputTemplate</span>
               </dt>
-              <dd className="mt-1 text-gray-700">{run.output_template_id} <span className="text-xs text-gray-500">v{run.output_template_version}</span></dd>
+              <dd className="mt-1 text-gray-700">
+                {run.output_template_name ?? <code className="text-xs text-gray-400">{run.output_template_id}</code>}{' '}
+                <span className="text-xs text-gray-500">v{run.output_template_version}</span>
+              </dd>
             </div>
             <div>
               <dt className="text-xs font-semibold text-gray-500">Project</dt>
-              <dd className="mt-1"><Link to={`/projects/${run.project_id}`} className="text-sm text-blue-600 hover:underline">{run.project_id}</Link></dd>
+              <dd className="mt-1">
+                <Link to={`/projects/${run.project_id}`} className="text-sm text-blue-600 hover:underline">
+                  {run.project_name ?? run.project_id}
+                </Link>
+              </dd>
             </div>
             <div>
               <dt className="text-xs font-semibold text-gray-500">Triggered by</dt>
-              <dd className="mt-1 text-sm text-gray-700">{run.triggered_by}</dd>
+              <dd className="mt-1 text-sm text-gray-700">{run.triggered_by_email ?? run.triggered_by}</dd>
             </div>
           </dl>
         </div>
@@ -187,6 +204,21 @@ export default function RunDetailPage() {
             <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
               <p className="font-semibold">Run failed</p>
               <p className="mt-1">{run.error || 'unknown error'}</p>
+              {run.error?.includes('Drive download failed') && (
+                <div className="mt-3 border-t border-red-200 pt-2">
+                  <p className="font-semibold text-red-900">Likely cause: Google account mismatch</p>
+                  <p className="mt-1 text-red-800">
+                    The narrow <code className="rounded bg-red-100 px-1">drive.file</code> OAuth scope this app uses can only see Drive files
+                    that the SAME Google account uploaded via this app. If the Model / pack / template
+                    was uploaded under a different Google account than the one currently signed in
+                    (e.g. work vs personal), the file is invisible to your current session.
+                  </p>
+                  <p className="mt-2 text-red-800">
+                    <strong>Fix:</strong> sign out, sign back in with the Google account that uploaded
+                    the file (check the file's owner in Drive), and retry.
+                  </p>
+                </div>
+              )}
             </div>
           ) : (
             <p className="text-sm text-gray-500">No output yet.</p>

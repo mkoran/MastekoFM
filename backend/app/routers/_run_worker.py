@@ -136,7 +136,7 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
                 f"Composition missing on retry: model={bool(model)} pack={bool(pack)} tpl={bool(tpl)}"
             )
 
-        model_bytes = pack_store.load_model_bytes_compat(model)
+        model_bytes = pack_store.load_model_bytes_compat(model, user_token=drive_token)
         pack_bytes = pack_store.load_pack_bytes_compat(pack, user_token=drive_token)
         tpl_bytes = pack_store.load_output_template_bytes_compat(tpl, user_token=drive_token)
 

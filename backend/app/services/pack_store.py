@@ -221,15 +221,70 @@ def store_for_scenario(scn: dict[str, Any]) -> AssumptionPackStore:
 # ── High-level loaders (Sprint B) ────────────────────────────────────────────
 # These centralize "given a Firestore doc for X, return its xlsx bytes". Used by
 # the runs router so route handlers don't have to know about storage internals.
+#
+# Sprint F.1 — Drive-token fallback:
+#   The narrow `drive.file` OAuth scope only sees files the SAME Google account
+#   uploaded via this app. If a user signs in with a DIFFERENT Google account
+#   than the one that uploaded the file, the user's token returns 404. Fix:
+#   try the user's token first; on failure, mint an SA-scoped token (which has
+#   broader `drive` scope and can see anything in the shared MastekoFM folder)
+#   and retry. Falls back transparently — happy path is unchanged.
 
 
-def load_model_bytes_compat(model: dict[str, Any]) -> bytes:
-    """Load a Model's xlsx bytes (Drive or GCS depending on what it has)."""
+def _try_sa_drive_token() -> str | None:
+    """Mint a Drive-scoped access token from the runtime SA, or None if unavailable.
+
+    The deployer / runtime SA has Editor access to the MastekoFM Drive root
+    (granted at project creation). Its `drive` scope sees everything inside,
+    independent of which user account uploaded which file.
+    """
+    try:
+        import google.auth
+        import google.auth.transport.requests
+    except ImportError:
+        return None
+    try:
+        creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/drive"])
+        creds.refresh(google.auth.transport.requests.Request())
+        return creds.token
+    except Exception as exc:  # noqa: BLE001
+        logger.info("SA drive-token mint failed (%s); user token only", exc)
+        return None
+
+
+def _download_with_fallback(file_id: str, user_token: str | None, label: str) -> bytes:
+    """Try user_token first, then fall back to SA-minted drive-scope token."""
+    # Try 1: user's token (drive.file scope — narrow but happy path)
+    if user_token:
+        content = drive_service.download_file(file_id, user_access_token=user_token)
+        if content is not None:
+            return content
+        logger.info(
+            "Drive download via user token failed for %s file_id=%s — trying SA fallback",
+            label, file_id,
+        )
+    # Try 2: SA token (drive scope — broad, but only sees files in the shared folder)
+    sa_token = _try_sa_drive_token()
+    if sa_token:
+        content = drive_service.download_file(file_id, user_access_token=sa_token)
+        if content is not None:
+            return content
+    raise RuntimeError(
+        f"Drive download failed for {label} file_id={file_id} "
+        f"(tried both user token and SA-fallback). "
+        f"Likely cause: the file is owned by a Google account NOT signed into this app, "
+        f"AND not shared with the deployer service account. Either sign in with the "
+        f"owning account, or share the MastekoFM Drive folder with the runtime SA."
+    )
+
+
+def load_model_bytes_compat(model: dict[str, Any], *, user_token: str | None = None) -> bytes:
+    """Load a Model's xlsx bytes (Drive or GCS depending on what it has).
+
+    Sprint F.1: now accepts user_token for Drive-backed Models (was missing).
+    """
     if model.get("drive_file_id"):
-        content = drive_service.download_file(model["drive_file_id"])
-        if content is None:
-            raise RuntimeError(f"Drive download failed for model file_id={model['drive_file_id']}")
-        return content
+        return _download_with_fallback(model["drive_file_id"], user_token, "model")
     if model.get("storage_path"):
         return storage_service.download_xlsx(model["storage_path"])
     raise ValueError("Model has neither drive_file_id nor storage_path")
@@ -240,10 +295,7 @@ def load_pack_bytes_compat(pack: dict[str, Any], *, user_token: str | None = Non
     if pack.get("storage_kind") == STORAGE_KIND_DRIVE_XLSX or pack.get("drive_file_id"):
         if not pack.get("drive_file_id"):
             raise ValueError("Drive-backed pack has no drive_file_id")
-        content = drive_service.download_file(pack["drive_file_id"], user_access_token=user_token)
-        if content is None:
-            raise RuntimeError(f"Drive download failed for pack file_id={pack['drive_file_id']}")
-        return content
+        return _download_with_fallback(pack["drive_file_id"], user_token, "pack")
     if pack.get("storage_path"):
         return storage_service.download_xlsx(pack["storage_path"])
     raise ValueError("AssumptionPack has neither drive_file_id nor storage_path")
@@ -253,7 +305,4 @@ def load_output_template_bytes_compat(tpl: dict[str, Any], *, user_token: str | 
     """Load an OutputTemplate's xlsx bytes (Drive-only by design)."""
     if not tpl.get("drive_file_id"):
         raise ValueError("OutputTemplate must be Drive-backed")
-    content = drive_service.download_file(tpl["drive_file_id"], user_access_token=user_token)
-    if content is None:
-        raise RuntimeError(f"Drive download failed for output_template file_id={tpl['drive_file_id']}")
-    return content
+    return _download_with_fallback(tpl["drive_file_id"], user_token, "output_template")
