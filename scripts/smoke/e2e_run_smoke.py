@@ -212,11 +212,32 @@ def run_e2e(api_base: str, auth_token: str, drive_token: str) -> int:
 
     ws = wb["O_Report"]
     # Layout (from build_helloworld_seed.py):
-    #   B3 = Sum (Model O_Results.sum)         expected 5+7  = 12
-    #   B4 = Product (Model O_Results.product) expected 5*7  = 35
-    #   B5 = Total (B3 + B4)                   expected      = 47
+    #   B3 = Sum (Model O_Results.sum)
+    #   B4 = Product (Model O_Results.product)
+    #   B5 = Total (B3 + B4)
     actual = {"sum": ws["B3"].value, "product": ws["B4"].value, "total": ws["B5"].value}
-    expected = {"sum": 12, "product": 35, "total": 47}
+
+    # Sprint INFRA-002 v2: compute expected values from the actual pack inputs
+    # (a, b on I_Numbers!B1, B2). The seed defaults to a=5, b=7 but humans can
+    # edit the pack file in Drive — we want the smoke to verify the engine
+    # math (sum=a+b, product=a*b, total=sum+product) regardless of input
+    # values. If we can't read inputs, fall back to seed defaults.
+    a, b = 5, 7
+    try:
+        inputs_resp = _request(
+            "GET",
+            f"{api_base}/api/projects/{project_id}/assumption-packs/{pack_id}/inputs",
+            auth_token=auth_token, drive_token=drive_token,
+        )
+        cells = {(c["tab"], c["cell_ref"]): c["value"] for c in inputs_resp.get("cells", [])}
+        if ("I_Numbers", "B1") in cells and ("I_Numbers", "B2") in cells:
+            a = cells[("I_Numbers", "B1")]
+            b = cells[("I_Numbers", "B2")]
+            print(f"  Pack inputs: a={a}, b={b}")
+    except Exception as exc:
+        print(f"  WARN: couldn't read pack inputs ({exc}); falling back to seed defaults", file=sys.stderr)
+
+    expected = {"sum": a + b, "product": a * b, "total": a + b + a * b}
 
     failures = [
         f"O_Report.{label} expected {expected[label]} got {actual[label]!r}"
