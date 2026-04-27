@@ -57,13 +57,12 @@ jobs:
             --substitutions="_SERVICE_NAME=${SERVICE_NAME},_ENVIRONMENT=prod,_VERSION=${{ steps.ver.outputs.version }},_AUTO_ROLLBACK=true"
 
       - name: Deploy Firebase Hosting (PROD)
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          projectId: ${{ vars.GCP_PROJECT_ID }}
-          target: ${{ env.HOSTING_TARGET }}
-          channelId: live
+        # Uses ADC from WIF auth — no long-lived FIREBASE_TOKEN secret needed.
+        run: |
+          npx firebase-tools@latest deploy \
+            --only hosting:${HOSTING_TARGET} \
+            --project ${{ vars.GCP_PROJECT_ID }} \
+            --non-interactive
 
       - name: Post-deploy smoke tests (PROD)
         # PROD never sets DEV_AUTH_BYPASS, so we only smoke-test the public surface.

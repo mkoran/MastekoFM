@@ -10,6 +10,7 @@ permissions:
   contents: read
   pull-requests: write
   checks: write
+  id-token: write   # required for WIF
 
 jobs:
   preview:
@@ -21,16 +22,25 @@ jobs:
           node-version: '20'
           cache: 'npm'
           cache-dependency-path: frontend/package-lock.json
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_DEPLOYER_SA_EMAIL }}
+
       - name: Build frontend
         working-directory: frontend
         run: |
           npm ci
           npm run build
+
       - name: Deploy preview channel
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-          projectId: ${{ vars.GCP_PROJECT_ID }}
-          expires: 7d
+        # ADC from WIF — channel id = pr-<number>, expires 7d. No long-lived secrets.
+        run: |
+          npx firebase-tools@latest hosting:channel:deploy "pr-${{ github.event.number }}" \
+            --only hosting:dev \
+            --project ${{ vars.GCP_PROJECT_ID }} \
+            --expires 7d \
+            --non-interactive
           # Note: preview channels share the DEV backend (api-dev), not prod

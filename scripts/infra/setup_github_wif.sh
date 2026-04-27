@@ -113,7 +113,22 @@ echo "  GCP_DEPLOYER_SA_EMAIL  = ${SA_EMAIL}"
 echo "  GCP_BACKEND_SERVICE    = masteko-fm-api-dev   (for the dev workflow)"
 echo "  FIREBASE_HOSTING_TARGET= dev"
 echo
-echo "And one secret (for Firebase Hosting deploy):"
-echo "  FIREBASE_TOKEN         = (run 'firebase login:ci' once and paste the result)"
+echo "(No long-lived secrets. Firebase Hosting uses Application Default"
+echo " Credentials from the WIF auth step.)"
 echo
 echo "Then push to a branch and the deploy-dev workflow will run automatically."
+
+# Print the gh CLI commands to set the variables (so a follow-up automation
+# can apply them without manual GitHub UI clicks):
+cat <<EOF
+
+If you have gh CLI authenticated with repo scope, run these to set the
+GitHub repository variables:
+
+  gh variable set GCP_PROJECT_ID --repo "${GITHUB_REPO}" --body "${PROJECT_ID}"
+  gh variable set GCP_REGION --repo "${GITHUB_REPO}" --body "${REGION}"
+  gh variable set GCP_WIF_PROVIDER --repo "${GITHUB_REPO}" --body "${PROVIDER_RESOURCE}"
+  gh variable set GCP_DEPLOYER_SA_EMAIL --repo "${GITHUB_REPO}" --body "${SA_EMAIL}"
+  gh variable set GCP_BACKEND_SERVICE --repo "${GITHUB_REPO}" --body "masteko-fm-api-dev"
+  gh variable set FIREBASE_HOSTING_TARGET --repo "${GITHUB_REPO}" --body "dev"
+EOF
