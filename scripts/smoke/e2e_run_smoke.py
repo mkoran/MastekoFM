@@ -171,13 +171,15 @@ def run_e2e(api_base: str, auth_token: str, drive_token: str) -> int:
     run_id = run.get("id")
     print(f"    run_id={run_id} status={run.get('status')} duration_ms={run.get('duration_ms')}")
 
-    # 3. Poll until terminal (sync engine completes by the time POST returns,
-    #    but this code path is ready for Sprint C async)
-    deadline = time.time() + 90
+    # 3. Poll until terminal. Cloud Run cold start + LibreOffice cold start +
+    #    two-stage engine + Drive download/upload = ~85s for Hello World. Give
+    #    300s deadline for headroom; the polling overhead is negligible.
+    deadline = time.time() + 300
     while run.get("status") in ("pending", "running") and time.time() < deadline:
         time.sleep(2)
         run = _request("GET", f"{api_base}/api/runs/{run_id}", auth_token=auth_token)
-        print(f"    polling… status={run.get('status')}")
+        elapsed = int(300 - (deadline - time.time()))
+        print(f"    polling… status={run.get('status')} elapsed={elapsed}s")
 
     if run.get("status") != "completed":
         print(f"  FAIL: run did not reach completed (got {run.get('status')!r})", file=sys.stderr)

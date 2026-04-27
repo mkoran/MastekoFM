@@ -57,6 +57,7 @@ def enqueue_run(
 
     # Lazy import to keep tests fast and avoid hard dep when not needed.
     from google.cloud import tasks_v2
+    from google.protobuf import duration_pb2
 
     client = tasks_v2.CloudTasksClient()
     parent = client.queue_path(settings.gcp_project, settings.gcp_region, settings.runs_queue)
@@ -66,6 +67,10 @@ def enqueue_run(
         payload["drive_token"] = drive_token
 
     target_url = f"{settings.runs_worker_url.rstrip('/')}/internal/tasks/run/{run_id}"
+    # 15-min dispatch deadline. Default 10min Cloud Tasks deadline is barely
+    # enough for ~85s Hello World; for Campus Adele (~17s warm, much longer
+    # cold), we want headroom. Max allowed by Cloud Tasks is 30min (1800s).
+    dispatch_deadline = duration_pb2.Duration(seconds=900)
     task = {
         "http_request": {
             "http_method": tasks_v2.HttpMethod.POST,
@@ -76,7 +81,8 @@ def enqueue_run(
                 "service_account_email": settings.runs_worker_sa,
                 "audience": target_url,
             },
-        }
+        },
+        "dispatch_deadline": dispatch_deadline,
     }
 
     response = client.create_task(parent=parent, task=task)
