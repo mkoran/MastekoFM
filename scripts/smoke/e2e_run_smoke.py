@@ -68,7 +68,15 @@ def _env_or_die(key: str) -> str:
 
 
 def get_drive_token() -> str | None:
-    """Return a Drive-scoped access token, or None if none is available."""
+    """Return a Drive-scoped access token, or None if none is available.
+
+    Uses the broad `drive` scope (NOT drive.file). Why: the seed endpoint is
+    idempotent — re-running returns the existing project + pack files which
+    were created by the original (human) user, not the SA. With drive.file
+    scope the SA only sees files IT created, so reading the existing pack
+    fails 404. Service accounts using drive scope is safe; the verification
+    requirement only applies to user-facing OAuth.
+    """
     if (token := os.environ.get("MFM_DRIVE_TOKEN")):
         return token
     try:
@@ -78,7 +86,7 @@ def get_drive_token() -> str | None:
         return None
     try:
         creds, _ = google.auth.default(
-            scopes=["https://www.googleapis.com/auth/drive.file"]
+            scopes=["https://www.googleapis.com/auth/drive"]
         )
         creds.refresh(google.auth.transport.requests.Request())
         return creds.token
