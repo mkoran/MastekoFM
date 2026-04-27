@@ -313,6 +313,33 @@ def _seed_one(
 # ── HELLO WORLD ──────────────────────────────────────────────────────────────
 
 
+def _seed_one_with_clear_errors(**kwargs):
+    """Wraps _seed_one to convert internal RuntimeErrors into HTTPException with
+    the original message in the body. Without this, FastAPI's default 500 swallows
+    the upstream error (e.g. Drive storageQuotaExceeded), making CI debugging
+    impossible.
+    """
+    try:
+        return _seed_one(**kwargs)
+    except HTTPException:
+        raise
+    except RuntimeError as exc:
+        msg = str(exc)
+        if "storageQuotaExceeded" in msg or "storage quota" in msg.lower():
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    "Drive storageQuotaExceeded — Service Accounts cannot create "
+                    "files in personal Drives. Either sign in as a real user "
+                    "(user tokens have storage quota), or migrate the MastekoFM "
+                    "Drive root into a Shared Drive. Original: " + msg
+                ),
+            ) from exc
+        raise HTTPException(status_code=500, detail=f"Seed failed: {msg}") from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=500, detail=f"Seed failed: {exc}") from exc
+
+
 @router.post("/api/seed/helloworld")
 async def seed_helloworld(current_user: CurrentUser, request: Request):
     """Idempotent: uploads 3 Hello World seed files + creates a Project."""
@@ -321,7 +348,7 @@ async def seed_helloworld(current_user: CurrentUser, request: Request):
         raise HTTPException(
             status_code=400, detail="Hello World seed requires X-MFM-Drive-Token header.",
         )
-    return _seed_one(
+    return _seed_one_with_clear_errors(
         seed_dir=REPO_ROOT / "seed" / "helloworld",
         model_filename="helloworld_model.xlsx",
         pack_filename="helloworld_inputs.xlsx",
@@ -354,7 +381,7 @@ async def seed_campus_adele(current_user: CurrentUser, request: Request):
         raise HTTPException(
             status_code=400, detail="Campus Adele seed requires X-MFM-Drive-Token header.",
         )
-    return _seed_one(
+    return _seed_one_with_clear_errors(
         seed_dir=REPO_ROOT / "seed" / "campus_adele",
         model_filename="campus_adele_model.xlsx",
         pack_filename="campus_adele_base_pack.xlsx",

@@ -157,7 +157,10 @@ def run_e2e(api_base: str, auth_token: str, drive_token: str) -> int:
             detail = str(body.get("detail", body))
         except Exception:  # noqa: BLE001
             detail = ""
-        if exc.code in (500, 403) and ("storageQuotaExceeded" in detail or "storage quota" in detail.lower()):
+        # New explicit 403 from seed handler, or legacy 500. Match either.
+        if (exc.code in (500, 403)) and (
+            "storageQuotaExceeded" in detail or "storage quota" in detail.lower()
+        ):
             print(
                 "  WARN: seed failed with SA storage-quota limitation. Engine NOT verified.\n"
                 "  Migrate the MastekoFM Drive root into a Shared Drive to unblock CI E2E.",
