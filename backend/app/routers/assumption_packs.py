@@ -86,6 +86,7 @@ def _to_scenario(doc_id: str, data: dict[str, Any]) -> AssumptionPackResponse:
         code_name=data.get("code_name", ""),
         description=data.get("description", ""),
         project_id=data.get("project_id", ""),
+        pack_number=data.get("pack_number", 0),
         status=data.get("status", "active"),
         archived=_is_archived(data),
         storage_kind=data.get("storage_kind") or store.kind,
@@ -110,6 +111,7 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> AssumptionPackSummary:
         id=doc_id,
         name=data.get("name", ""),
         code_name=data.get("code_name", ""),
+        pack_number=data.get("pack_number", 0),
         status=data.get("status", "active"),
         archived=_is_archived(data),
         version=data.get("version", 1),
@@ -118,6 +120,21 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> AssumptionPackSummary:
         created_by_email=data.get("created_by_email"),
         created_at=data.get("created_at", datetime.now(UTC)),
     )
+
+
+def _next_pack_number(project_id: str) -> int:
+    """Sprint G3: assign a sequential per-project pack number 1..99.
+
+    Walks existing packs and returns max(pack_number) + 1, falling back to 1.
+    Cap at 99 — past that, returns 99 and lets the caller decide (in practice
+    100+ packs per project is far beyond expected use).
+    """
+    max_n = 0
+    for doc in _scn_ref(project_id).stream():
+        n = (doc.to_dict() or {}).get("pack_number") or 0
+        if n > max_n:
+            max_n = n
+    return min(max_n + 1, 99)
 
 
 def _load_project_and_default_model(
@@ -250,11 +267,13 @@ async def create_scenario(
         raise HTTPException(status_code=500, detail="Drive upload failed")
 
     now = datetime.now(UTC)
+    pack_number = _next_pack_number(project_id)
     data: dict[str, Any] = {
         "name": body.name,
         "code_name": scenario_code,
         "description": body.description,
         "project_id": project_id,
+        "pack_number": pack_number,
         "status": "active",
         "archived": False,
         "version": 1,

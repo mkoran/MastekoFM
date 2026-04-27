@@ -280,6 +280,7 @@ def _seed_one(
             "code_name": pack_code,
             "description": pack_description,
             "project_id": proj_id,
+            "pack_number": 1,                # Sprint G3: seeded pack is AP01
             "status": "active",
             "archived": False,
             "storage_kind": "drive_xlsx",

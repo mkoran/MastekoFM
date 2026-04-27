@@ -180,8 +180,18 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
                 ws_code = (ws_snap.to_dict() or {}).get("code_name", "default")
 
         run_folder_name_str = drive_service.run_folder_name(started_at, pack_code, tpl_code)
-        out_filename = drive_service.versioned_filename(
-            f"{pack_code}_{tpl_code}", 1, ext="xlsx"
+        # Sprint G3 — output filename per Marc's spec:
+        #   {YYYYMMDD_HHMMSS}_{model_code}_V{model_version}_AP{NN}.xlsx
+        # e.g. 20260427_224908_helloworld_model_V1_AP01.xlsx
+        # The timestamp here uses the started_at on the Run; matches the
+        # parent folder's prefix (no leading dash; the folder name uses
+        # YYYYMMDD-HHMMSS, the file uses YYYYMMDD_HHMMSS).
+        model_code = model.get("code_name") or model.get("name") or "model"
+        model_version = model.get("version", 1)
+        pack_number = pack.get("pack_number") or 0
+        ts_for_file = started_at.strftime("%Y%m%d_%H%M%S")
+        out_filename = (
+            f"{ts_for_file}_{model_code}_V{model_version}_AP{pack_number:02d}.xlsx"
         )
 
         output_drive_file_id: str | None = None
@@ -229,11 +239,17 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
             "duration_ms": duration_ms,
             "output_folder_id": output_folder_id,                                # Sprint G1
             "output_folder_url": drive_service.folder_url(output_folder_id),     # Sprint G1
+            "output_filename": out_filename,                                     # Sprint G3
             "output_artifacts": [                                                # Sprint G1
                 {
                     "format": "xlsx",
+                    "filename": out_filename,                                    # Sprint G3
                     "drive_file_id": output_drive_file_id,
                     "download_url": download_url,
+                    "edit_url": (
+                        f"https://docs.google.com/spreadsheets/d/{output_drive_file_id}/edit"
+                        if output_drive_file_id else None
+                    ),
                     "size_bytes": len(result["output_bytes"]),
                 }
             ] if output_drive_file_id else [],

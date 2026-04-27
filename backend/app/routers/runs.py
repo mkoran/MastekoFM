@@ -173,6 +173,7 @@ def _to_response(doc_id: str, data: dict[str, Any]) -> RunResponse:
         output_drive_file_id=data.get("output_drive_file_id"),
         output_folder_id=data.get("output_folder_id"),
         output_folder_url=data.get("output_folder_url"),
+        output_filename=data.get("output_filename"),
         output_artifacts=data.get("output_artifacts", []),
         warnings=data.get("warnings", []),
         error=data.get("error"),
@@ -198,6 +199,9 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> RunSummary:
         completed_at=data.get("completed_at"),
         duration_ms=data.get("duration_ms"),
         output_download_url=data.get("output_download_url"),
+        output_drive_file_id=data.get("output_drive_file_id"),         # Sprint G3
+        output_folder_url=data.get("output_folder_url"),               # Sprint G3
+        output_filename=data.get("output_filename"),                   # Sprint G3
         triggered_by=data.get("triggered_by", ""),
         triggered_by_email=data.get("triggered_by_email"),
     )

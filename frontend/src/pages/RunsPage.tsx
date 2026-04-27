@@ -24,6 +24,9 @@ interface RunSummary {
   completed_at: string | null
   duration_ms: number | null
   output_download_url: string | null
+  output_drive_file_id: string | null   // Sprint G3 — for Open in Sheets
+  output_folder_url: string | null      // Sprint G3 — for Drive folder link
+  output_filename: string | null        // Sprint G3 — {ts}_{model}_V{v}_AP{NN}.xlsx
   triggered_by: string
   triggered_by_email: string | null
 }
@@ -136,7 +139,8 @@ export default function RunsPage() {
               <th className="px-3 py-2">AssumptionPack</th>
               <th className="px-3 py-2">OutputTemplate</th>
               <th className="px-3 py-2">By</th>
-              <th className="px-3 py-2">Output</th>
+              <th className="px-3 py-2">Open in Sheets</th>
+              <th className="px-3 py-2">📁 Folder</th>
             </tr>
           </thead>
           <tbody>
@@ -159,19 +163,42 @@ export default function RunsPage() {
                 <td className="px-3 py-2 text-xs">{r.output_template_name ?? r.output_template_id.slice(0, 8) + '…'}</td>
                 <td className="px-3 py-2 text-xs text-gray-600">{r.triggered_by_email ?? r.triggered_by}</td>
                 <td className="px-3 py-2">
-                  {r.output_download_url ? (
+                  {r.output_drive_file_id ? (
+                    <a
+                      href={`https://docs.google.com/spreadsheets/d/${r.output_drive_file_id}/edit`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-blue-600 hover:underline"
+                      title={r.output_filename ?? undefined}
+                    >
+                      📊 {r.output_filename ?? 'Open'}
+                    </a>
+                  ) : r.output_download_url ? (
                     <a href={r.output_download_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline">
                       .xlsx
+                    </a>
+                  ) : '—'}
+                </td>
+                <td className="px-3 py-2">
+                  {r.output_folder_url ? (
+                    <a
+                      href={r.output_folder_url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-blue-600 hover:underline"
+                      title="Open Drive folder for this run"
+                    >
+                      📁 Folder
                     </a>
                   ) : '—'}
                 </td>
               </tr>
             ))}
             {!loading && runs.length === 0 && (
-              <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-gray-500">No runs match the current filters.</td></tr>
+              <tr><td colSpan={10} className="px-3 py-6 text-center text-sm text-gray-500">No runs match the current filters.</td></tr>
             )}
             {loading && (
-              <tr><td colSpan={9} className="px-3 py-6 text-center text-sm text-gray-500">Loading…</td></tr>
+              <tr><td colSpan={10} className="px-3 py-6 text-center text-sm text-gray-500">Loading…</td></tr>
             )}
           </tbody>
         </table>

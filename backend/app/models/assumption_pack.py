@@ -40,6 +40,7 @@ class AssumptionPackResponse(BaseModel):
     code_name: str
     description: str
     project_id: str
+    pack_number: int = 0              # Sprint G3: per-project counter 1..99 (0 = legacy/unassigned)
     status: str                       # active | archived
     archived: bool = False            # Sprint UX-01: explicit boolean
     storage_kind: str = "drive_xlsx"  # Sprint UX-01: default Drive (post-Sprint-B)
@@ -63,6 +64,7 @@ class AssumptionPackSummary(BaseModel):
     id: str
     name: str
     code_name: str
+    pack_number: int = 0  # Sprint G3
     status: str
     archived: bool = False  # Sprint UX-01
     version: int

@@ -261,49 +261,54 @@ export default function ProjectView() {
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* AssumptionPack list */}
+      <div className="space-y-6">
+        {/* AssumptionPack list — Sprint G3: full-width above the detail panel for better real estate */}
         <div className="rounded border bg-white">
           <div className="border-b px-3 py-2 text-sm font-semibold text-gray-700">Assumption Packs</div>
-          <ul>
+          <div className="flex flex-wrap gap-2 p-3">
             {packs.map((s) => (
-              <li key={s.id}>
-                <button
-                  onClick={() => setSelectedId(s.id)}
-                  className={`block w-full px-3 py-2 text-left text-sm hover:bg-gray-50 ${selectedId === s.id ? 'bg-blue-50 font-semibold' : ''}`}
-                >
-                  <div>{s.name}</div>
-                  <div className="text-xs text-gray-500">
-                    v{s.version}{s.last_run_status ? ` · last ${s.last_run_status}` : ''}
-                  </div>
-                </button>
-              </li>
+              <button
+                key={s.id}
+                onClick={() => setSelectedId(s.id)}
+                className={`rounded border px-3 py-2 text-left text-sm hover:bg-gray-50 ${
+                  selectedId === s.id
+                    ? 'border-blue-400 bg-blue-50 font-semibold'
+                    : 'border-gray-200 bg-white'
+                }`}
+              >
+                <div>{s.name}</div>
+                <div className="text-xs text-gray-500">
+                  v{s.version}{s.last_run_status ? ` · last ${s.last_run_status}` : ''}
+                </div>
+              </button>
             ))}
-            {packs.length === 0 && <li className="px-3 py-3 text-xs text-gray-500">No packs yet.</li>}
-          </ul>
+            {packs.length === 0 && <div className="px-1 py-1 text-xs text-gray-500">No packs yet.</div>}
+          </div>
           <div className="border-t p-3">
             <div className="mb-2 text-xs font-semibold text-gray-600">New AssumptionPack</div>
-            <input
-              className="mb-1 w-full rounded border px-2 py-1 text-xs"
-              placeholder="Name"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-            />
-            <select className="mb-1 w-full rounded border px-2 py-1 text-xs" value={cloneFromId} onChange={(e) => setCloneFromId(e.target.value)}>
-              <option value="">Seed from default Model</option>
-              {packs.map((s) => (
-                <option key={s.id} value={s.id}>Clone from: {s.name}</option>
-              ))}
-            </select>
-            <button onClick={handleCreatePack} className="w-full rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700">
-              Create
-            </button>
-            <p className="mt-2 text-[10px] text-gray-500">Stored in Drive (.xlsx). Edit in Sheets after creation.</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                className="rounded border px-2 py-1 text-xs"
+                placeholder="Name"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+              />
+              <select className="rounded border px-2 py-1 text-xs" value={cloneFromId} onChange={(e) => setCloneFromId(e.target.value)}>
+                <option value="">Seed from default Model</option>
+                {packs.map((s) => (
+                  <option key={s.id} value={s.id}>Clone from: {s.name}</option>
+                ))}
+              </select>
+              <button onClick={handleCreatePack} className="rounded bg-blue-600 px-3 py-1.5 text-xs text-white hover:bg-blue-700">
+                Create
+              </button>
+              <p className="text-[10px] text-gray-500">Stored in Drive (.xlsx). Edit in Sheets after creation.</p>
+            </div>
           </div>
         </div>
 
-        {/* Scenario detail + actions */}
-        <div className="rounded border bg-white lg:col-span-2">
+        {/* Scenario detail + actions — full width below the pack list */}
+        <div className="rounded border bg-white">
           {selected ? (
             <div className="p-4">
               <div className="mb-3 flex items-center justify-between">
