@@ -194,7 +194,16 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
             )
 
         model_bytes = pack_store.load_model_bytes_compat(model, user_token=drive_token)
-        pack_bytes = pack_store.load_pack_bytes_compat(pack, user_token=drive_token)
+        # Sprint I — pull packs run connectors at this point; workspace_id +
+        # run_id flow through to the connector context for provenance and
+        # (future) caching keys.
+        pack_workspace_id = pack.get("workspace_id") or proj.get("workspace_id")
+        pack_bytes = pack_store.load_pack_bytes_compat(
+            pack,
+            user_token=drive_token,
+            workspace_id=pack_workspace_id,
+            run_id=run_id,
+        )
         tpl_bytes = pack_store.load_output_template_bytes_compat(tpl, user_token=drive_token)
 
         result = run_executor.execute_run_sync(

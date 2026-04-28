@@ -23,6 +23,7 @@ interface AssumptionPackSummary {
   code_name: string
   status: string
   version: number
+  pack_kind?: 'xlsx' | 'json' | 'pull'   // Sprint I-1
   last_run_at: string | null
   last_run_status: string | null
   created_at: string
@@ -276,7 +277,25 @@ export default function ProjectView() {
                     : 'border-gray-200 bg-white'
                 }`}
               >
-                <div>{s.name}</div>
+                <div className="flex items-center gap-1">
+                  <span>{s.name}</span>
+                  {s.pack_kind === 'pull' && (
+                    <span
+                      className="rounded bg-purple-100 px-1.5 py-0.5 text-[10px] font-medium text-purple-700"
+                      title="This pack's values are pulled from external sources at Run time"
+                    >
+                      🔗 pull
+                    </span>
+                  )}
+                  {s.pack_kind === 'json' && (
+                    <span
+                      className="rounded bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700"
+                      title="This pack's values come from a JSON dict (no underlying xlsx)"
+                    >
+                      json
+                    </span>
+                  )}
+                </div>
                 <div className="text-xs text-gray-500">
                   v{s.version}{s.last_run_status ? ` · last ${s.last_run_status}` : ''}
                 </div>

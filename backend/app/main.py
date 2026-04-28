@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.app.routers import (
     assumption_packs,
     auth,
+    connections,
     health,
     models,
     output_templates,
@@ -52,3 +53,5 @@ app.include_router(settings.router)
 app.include_router(seed.router)
 # Sprint A.5 — Tree Navigator endpoints
 app.include_router(tree.router)
+# Sprint I-2 — workspace connection management (Airtable etc.)
+app.include_router(connections.router)
