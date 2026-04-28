@@ -182,7 +182,7 @@ def main() -> int:
 
     targets = collect_targets(token)
     total = sum(len(v) for v in targets.values())
-    print(f"\nCurrent DEV Firestore state:")
+    print("\nCurrent DEV Firestore state:")
     for k, names in sorted(targets.items()):
         print(f"  {k}: {len(names)} doc(s)")
     print(f"\nTotal docs to delete: {total}")

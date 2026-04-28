@@ -101,14 +101,35 @@ def test_run_e2e_fails_when_run_status_is_failed():
     assert rc == 1
 
 
-def test_run_e2e_soft_passes_when_no_output_url():
+def test_run_e2e_soft_passes_when_no_output_url_and_env_var_set():
     """Sprint G1: SA storage-quota limitation means the run output may be null.
-    The engine ran (status=completed), so we treat this as a soft pass."""
+    Sprint M: this soft-pass is now gated behind ALLOW_SA_QUOTA_SOFT_PASS=1
+    so we can drop it the moment the Drive root moves into a Shared Drive."""
+    import os
     mod = _load_script_module()
     run_resp = {"id": "r-1", "status": "completed", "output_download_url": None}
-    with patch.object(mod, "_request", side_effect=_patched_request_factory(SEED_RESPONSE, run_resp)):
+    with (
+        patch.object(mod, "_request", side_effect=_patched_request_factory(SEED_RESPONSE, run_resp)),
+        patch.dict(os.environ, {"ALLOW_SA_QUOTA_SOFT_PASS": "1"}),
+    ):
         rc = mod.run_e2e("https://api", "auth", "drive")
     assert rc == 0  # soft pass with warning
+
+
+def test_run_e2e_hard_fails_when_no_output_url_and_env_var_unset():
+    """Sprint M: without the soft-pass env var, a null output_download_url
+    is a real failure — the most likely cause is the Drive root still being
+    in a personal Drive (Shared-Drive migration not done yet)."""
+    import os
+    mod = _load_script_module()
+    run_resp = {"id": "r-1", "status": "completed", "output_download_url": None}
+    env_no_soft_pass = {k: v for k, v in os.environ.items() if k != "ALLOW_SA_QUOTA_SOFT_PASS"}
+    with (
+        patch.object(mod, "_request", side_effect=_patched_request_factory(SEED_RESPONSE, run_resp)),
+        patch.dict(os.environ, env_no_soft_pass, clear=True),
+    ):
+        rc = mod.run_e2e("https://api", "auth", "drive")
+    assert rc == 1
 
 
 def test_run_e2e_fails_when_cells_wrong():
