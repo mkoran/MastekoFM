@@ -88,6 +88,42 @@ def upload_file(folder_id: str, filename: str, content: bytes, mime_type: str, u
         raise RuntimeError(f"Drive upload failed: {e}") from e
 
 
+def upload_docx_as_google_doc(
+    folder_id: str,
+    filename: str,
+    docx_content: bytes,
+    user_access_token: str | None = None,
+) -> str | None:
+    """Upload a .docx and have Drive convert it to a native Google Doc.
+
+    Sprint D-2: used to seed the Hello World narrative template — we generate
+    the .docx programmatically and Drive turns it into a Google Doc that
+    Marc can open in Sheets/Docs and edit WYSIWYG.
+
+    The trick is sending the .docx media with target mimeType set to the
+    Google Doc type — Drive's auto-conversion does the rest.
+    """
+    docx_mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    google_doc_mime = "application/vnd.google-apps.document"
+    try:
+        service = _get_drive_service(user_access_token)
+        media = MediaIoBaseUpload(io.BytesIO(docx_content), mimetype=docx_mime, resumable=False)
+        result = service.files().create(
+            body={"name": filename, "parents": [folder_id], "mimeType": google_doc_mime},
+            media_body=media,
+            fields="id",
+            supportsAllDrives=True,
+        ).execute()
+        logger.info(
+            "Uploaded '%s' as Google Doc to folder %s: %s",
+            filename, folder_id, result["id"],
+        )
+        return result["id"]
+    except Exception as e:
+        logger.exception("Failed to upload docx as Google Doc '%s' to folder '%s'", filename, folder_id)
+        raise RuntimeError(f"Drive upload (docx→Google Doc) failed: {e}") from e
+
+
 def download_file(file_id: str, user_access_token: str | None = None) -> bytes | None:
     """Download a file's raw bytes from Google Drive.
 

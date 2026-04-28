@@ -58,6 +58,8 @@ class RunSummary(BaseModel):
     output_filename: str | None = None       # Sprint G3 — `{ts}_{model}_V{v}_AP{NN}.xlsx`
     output_pdf_drive_file_id: str | None = None   # Sprint D-1 — for "📄 PDF" link
     output_pdf_filename: str | None = None        # Sprint D-1 — `{ts}_{model}_V{v}_AP{NN}.pdf`
+    output_narrative_pdf_drive_file_id: str | None = None  # Sprint D-2 — narrative PDF
+    output_narrative_pdf_filename: str | None = None       # Sprint D-2
     triggered_by: str
     triggered_by_email: str | None = None  # Sprint UX-01: for "Created By" filter on Runs page
 
@@ -98,6 +100,8 @@ class RunResponse(BaseModel):
     output_filename: str | None = None        # Sprint G3
     output_pdf_drive_file_id: str | None = None   # Sprint D-1: rendered from xlsx
     output_pdf_filename: str | None = None        # Sprint D-1
+    output_narrative_pdf_drive_file_id: str | None = None  # Sprint D-2: from Google Doc template
+    output_narrative_pdf_filename: str | None = None       # Sprint D-2
     output_artifacts: list[dict] = []         # Sprint G1: [{format, kind, filename, drive_file_id, download_url, edit_url, size_bytes}, ...]
     warnings: list[str] = []
     error: str | None = None

@@ -25,6 +25,7 @@ from backend.app.config import get_firestore_client, settings
 from backend.app.services import (
     drive_service,
     excel_engine,
+    narrative_pdf_service,
     pack_store,
     run_executor,
     storage_service,
@@ -257,6 +258,10 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
         pdf_drive_file_id: str | None = None
         pdf_filename: str | None = None
         pdf_size_bytes: int = 0
+        # Sprint D-2: Narrative PDF artifact (rendered from a Google Doc template)
+        narrative_pdf_drive_file_id: str | None = None
+        narrative_pdf_filename: str | None = None
+        narrative_pdf_size_bytes: int = 0
 
         if root and drive_token:
             try:
@@ -304,6 +309,48 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
                             "Run %s: PDF export failed; xlsx is still available",
                             run_id, exc_info=True,
                         )
+
+                # Sprint D-2 — Option 1: narrative PDF from a Google Doc
+                # template (designer-friendly WYSIWYG). Best-effort.
+                gdoc_template_id = tpl.get("google_doc_template_drive_file_id")
+                if gdoc_template_id:
+                    try:
+                        run_meta = {
+                            "id": run_id,
+                            "project_name": proj.get("name", ""),
+                            "project_code": project_code,
+                            "model_name": model.get("name", ""),
+                            "model_code": model_code,
+                            "pack_name": pack.get("name", ""),
+                            "pack_code": pack_code,
+                            "started_at": started_at.isoformat(),
+                        }
+                        narrative_pdf_bytes = narrative_pdf_service.render_narrative_pdf_from_google_doc(
+                            template_doc_id=gdoc_template_id,
+                            output_xlsx_bytes=result["output_bytes"],
+                            run_meta=run_meta,
+                            user_access_token=drive_token,
+                        )
+                        if narrative_pdf_bytes:
+                            narrative_pdf_filename = (
+                                f"{ts_for_file}_{model_code}_V{model_version}_AP{pack_number:02d}_narrative.pdf"
+                            )
+                            narrative_pdf_drive_file_id = drive_service.upload_file(
+                                output_folder_id, narrative_pdf_filename, narrative_pdf_bytes,
+                                PDF_MIME, user_access_token=drive_token,
+                            )
+                            narrative_pdf_size_bytes = len(narrative_pdf_bytes)
+                            logger.info(
+                                "Run %s: published narrative PDF (%d bytes, file_id=%s)",
+                                run_id, narrative_pdf_size_bytes, narrative_pdf_drive_file_id,
+                            )
+                        else:
+                            logger.warning("Run %s: narrative PDF returned None", run_id)
+                    except Exception:  # noqa: BLE001 — narrative PDF is best-effort
+                        logger.warning(
+                            "Run %s: narrative PDF failed; xlsx is still available",
+                            run_id, exc_info=True,
+                        )
             except Exception:  # noqa: BLE001 — Drive ops are best-effort; run still records
                 logger.warning(
                     "Drive output upload failed for run %s — output bytes lost",
@@ -335,6 +382,9 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
                 pdf_drive_file_id=pdf_drive_file_id,
                 pdf_filename=pdf_filename,
                 pdf_size_bytes=pdf_size_bytes,
+                google_doc_pdf_drive_file_id=narrative_pdf_drive_file_id,
+                google_doc_pdf_filename=narrative_pdf_filename,
+                google_doc_pdf_size_bytes=narrative_pdf_size_bytes,
             ),
             # Legacy fields kept for back-compat (frontends still read these)
             "output_download_url": download_url,
@@ -344,6 +394,9 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
             # or render failure).
             "output_pdf_drive_file_id": pdf_drive_file_id,
             "output_pdf_filename": pdf_filename,
+            # Sprint D-2: top-level narrative PDF fields (Google Doc template).
+            "output_narrative_pdf_drive_file_id": narrative_pdf_drive_file_id,
+            "output_narrative_pdf_filename": narrative_pdf_filename,
             "warnings": result["warnings"],
             "updated_at": completed_at,
             "drive_token": None,

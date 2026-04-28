@@ -13,16 +13,20 @@ layout. Each entity gets its own Drive folder. All files use {code}_v001.xlsx.
 The seed auto-creates a "Personal" workspace for the calling user if they
 don't have one. Idempotent: re-running returns existing ids.
 """
+import io
+import logging
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Any
 
+from docx import Document  # type: ignore[import-untyped]
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.app.config import get_firestore_client, settings
 from backend.app.middleware.auth import get_current_user
 from backend.app.services import drive_service, excel_template_engine, storage_service
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["seed"])
 
 CurrentUser = Annotated[dict[str, Any], Depends(get_current_user)]
@@ -88,6 +92,55 @@ def _find_pack_by_code(project_id: str, code: str) -> tuple[str | None, dict[str
     return None, None
 
 
+def _build_helloworld_narrative_docx_bytes() -> bytes:
+    """Sprint D-2 — generate a Hello World narrative DOCX template.
+
+    Marc opens this Google Doc in his browser to edit (true WYSIWYG). At
+    Run time, MastekoFM exports the Doc as DOCX, fills the Jinja2
+    placeholders with Model output values, and renders a PDF.
+
+    Cell references match the canonical Hello World fixture
+    (``scripts/build_helloworld_seed.py``):
+
+        I_Numbers.B1 = a (5),  I_Numbers.B2 = b (7)
+        O_Results.B1 = sum (12), O_Results.B2 = product (35)
+    """
+    doc = Document()
+    doc.add_heading("Hello World Report", level=0)
+    doc.add_paragraph(
+        "Generated for project {{ run.project_name }} on {{ run.started_at }}."
+    )
+    doc.add_heading("Inputs", level=1)
+    doc.add_paragraph("a = {{ model.I_Numbers.B1 }}")
+    doc.add_paragraph("b = {{ model.I_Numbers.B2 }}")
+    doc.add_heading("Calculation results", level=1)
+    p = doc.add_paragraph()
+    p.add_run("Sum: ").bold = True
+    p.add_run("{{ model.O_Results.B1 }}")
+    p = doc.add_paragraph()
+    p.add_run("Product: ").bold = True
+    p.add_run("{{ model.O_Results.B2 }}")
+    doc.add_heading("Summary", level=1)
+    doc.add_paragraph(
+        "The sum of {{ model.I_Numbers.B1 }} and {{ model.I_Numbers.B2 }} is "
+        "{{ model.O_Results.B1 }}; their product is {{ model.O_Results.B2 }}."
+    )
+    doc.add_paragraph(
+        "Edit this Google Doc in your browser — change the wording, add your logo, "
+        "drop in tables. Every Run will re-fill the {{ }} placeholders and produce "
+        "a fresh PDF."
+    )
+    doc.add_paragraph(
+        "Available placeholders: {{ model.<TabName>.<Cell> }} for any I_* or O_* "
+        "cell on the Model, plus run-level fields: {{ run.id }}, {{ run.project_name }}, "
+        "{{ run.model_name }}, {{ run.pack_name }}, {{ run.started_at }}."
+    ).italic = True
+
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
+
+
 def _seed_one(
     *,
     seed_dir: Path,
@@ -109,6 +162,8 @@ def _seed_one(
     user_token: str,
     current_user: dict,
     pdf_export_xlsx: bool = False,  # Sprint D-1: opt the seed's OutputTemplate into PDF
+    narrative_docx_factory: "Any" = None,  # Sprint D-2: callable() -> docx bytes
+    narrative_template_name: str | None = None,  # Sprint D-2: filename for the Google Doc
 ) -> dict[str, Any]:
     """Generic seeder used by both Hello World and Campus Adele endpoints."""
     root = _drive_root_id()
@@ -180,6 +235,29 @@ def _seed_one(
         patch: dict[str, Any] = {}
         if (tpl_data or {}).get("pdf_export_xlsx") != pdf_export_xlsx:
             patch["pdf_export_xlsx"] = pdf_export_xlsx
+        # Sprint D-2: if a narrative template is requested but the existing
+        # OutputTemplate has none, create it now and attach the new file id.
+        # If one already exists, leave it alone — Marc may have edited it.
+        if (
+            narrative_docx_factory is not None
+            and narrative_template_name
+            and not (tpl_data or {}).get("google_doc_template_drive_file_id")
+        ):
+            try:
+                tpl_folder_id_existing = (tpl_data or {}).get("drive_folder_id")
+                if tpl_folder_id_existing:
+                    new_doc_id = drive_service.upload_docx_as_google_doc(
+                        tpl_folder_id_existing,
+                        narrative_template_name,
+                        narrative_docx_factory(),
+                        user_access_token=user_token,
+                    )
+                    if new_doc_id:
+                        patch["google_doc_template_drive_file_id"] = new_doc_id
+            except Exception:  # noqa: BLE001 — best-effort
+                logger.exception(
+                    "Sprint D-2: narrative template upload failed for tpl %s", tpl_id,
+                )
         if patch:
             patch["updated_at"] = now
             db.collection(f"{_prefix()}output_templates").document(tpl_id).update(patch)
@@ -220,6 +298,24 @@ def _seed_one(
             "created_at": now,
             "updated_at": now,
         }
+        # Sprint D-2: optionally seed a narrative Google Doc template alongside.
+        if narrative_docx_factory is not None and narrative_template_name:
+            try:
+                narrative_doc_id = drive_service.upload_docx_as_google_doc(
+                    tpl_folder_id,
+                    narrative_template_name,
+                    narrative_docx_factory(),
+                    user_access_token=user_token,
+                )
+                tpl_data["google_doc_template_drive_file_id"] = narrative_doc_id
+                logger.info(
+                    "Sprint D-2: created narrative Google Doc %s for %s",
+                    narrative_doc_id, template_code,
+                )
+            except Exception:  # noqa: BLE001 — best-effort; xlsx still ships
+                logger.exception(
+                    "Sprint D-2: narrative Google Doc seed failed for %s", template_code,
+                )
         tpl_ref.set(tpl_data)
         tpl_id = tpl_ref.id
         result["created"].append(f"output_template={tpl_id}")
@@ -339,8 +435,7 @@ def _seed_one_with_clear_errors(**kwargs):
     Always logs the exception with full traceback so we can debug from logs
     too, not only from the response body.
     """
-    import logging
-    log = logging.getLogger(__name__)
+    log = logger
     try:
         return _seed_one(**kwargs)
     except HTTPException:
@@ -394,6 +489,8 @@ async def seed_helloworld(current_user: CurrentUser, request: Request):
         user_token=user_token,
         current_user=current_user,
         pdf_export_xlsx=True,  # Sprint D-1: showcase PDF artifact alongside xlsx
+        narrative_docx_factory=_build_helloworld_narrative_docx_bytes,  # Sprint D-2
+        narrative_template_name="Hello World Narrative",                # → Google Doc
     )
 
 

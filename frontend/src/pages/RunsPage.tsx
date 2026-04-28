@@ -29,6 +29,8 @@ interface RunSummary {
   output_filename: string | null        // Sprint G3 — {ts}_{model}_V{v}_AP{NN}.xlsx
   output_pdf_drive_file_id: string | null  // Sprint D-1 — PDF rendered from xlsx
   output_pdf_filename: string | null       // Sprint D-1 — {ts}_{model}_V{v}_AP{NN}.pdf
+  output_narrative_pdf_drive_file_id: string | null  // Sprint D-2 — narrative PDF (from Google Doc)
+  output_narrative_pdf_filename: string | null       // Sprint D-2
   triggered_by: string
   triggered_by_email: string | null
 }
@@ -143,6 +145,7 @@ export default function RunsPage() {
               <th className="px-3 py-2">By</th>
               <th className="px-3 py-2">Open in Sheets</th>
               <th className="px-3 py-2">📄 PDF</th>
+              <th className="px-3 py-2">📜 Narrative</th>
               <th className="px-3 py-2">📁 Folder</th>
             </tr>
           </thead>
@@ -196,6 +199,19 @@ export default function RunsPage() {
                   ) : '—'}
                 </td>
                 <td className="px-3 py-2">
+                  {r.output_narrative_pdf_drive_file_id ? (
+                    <a
+                      href={`https://drive.google.com/file/d/${r.output_narrative_pdf_drive_file_id}/view`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-xs text-blue-600 hover:underline"
+                      title={r.output_narrative_pdf_filename ?? 'Open narrative PDF'}
+                    >
+                      📜 Narrative
+                    </a>
+                  ) : '—'}
+                </td>
+                <td className="px-3 py-2">
                   {r.output_folder_url ? (
                     <a
                       href={r.output_folder_url}
@@ -211,10 +227,10 @@ export default function RunsPage() {
               </tr>
             ))}
             {!loading && runs.length === 0 && (
-              <tr><td colSpan={11} className="px-3 py-6 text-center text-sm text-gray-500">No runs match the current filters.</td></tr>
+              <tr><td colSpan={12} className="px-3 py-6 text-center text-sm text-gray-500">No runs match the current filters.</td></tr>
             )}
             {loading && (
-              <tr><td colSpan={11} className="px-3 py-6 text-center text-sm text-gray-500">Loading…</td></tr>
+              <tr><td colSpan={12} className="px-3 py-6 text-center text-sm text-gray-500">Loading…</td></tr>
             )}
           </tbody>
         </table>

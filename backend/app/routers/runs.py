@@ -176,6 +176,8 @@ def _to_response(doc_id: str, data: dict[str, Any]) -> RunResponse:
         output_filename=data.get("output_filename"),
         output_pdf_drive_file_id=data.get("output_pdf_drive_file_id"),     # Sprint D-1
         output_pdf_filename=data.get("output_pdf_filename"),               # Sprint D-1
+        output_narrative_pdf_drive_file_id=data.get("output_narrative_pdf_drive_file_id"),  # Sprint D-2
+        output_narrative_pdf_filename=data.get("output_narrative_pdf_filename"),            # Sprint D-2
         output_artifacts=data.get("output_artifacts", []),
         warnings=data.get("warnings", []),
         error=data.get("error"),
@@ -206,6 +208,8 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> RunSummary:
         output_filename=data.get("output_filename"),                   # Sprint G3
         output_pdf_drive_file_id=data.get("output_pdf_drive_file_id"), # Sprint D-1
         output_pdf_filename=data.get("output_pdf_filename"),           # Sprint D-1
+        output_narrative_pdf_drive_file_id=data.get("output_narrative_pdf_drive_file_id"),  # Sprint D-2
+        output_narrative_pdf_filename=data.get("output_narrative_pdf_filename"),            # Sprint D-2
         triggered_by=data.get("triggered_by", ""),
         triggered_by_email=data.get("triggered_by_email"),
     )
