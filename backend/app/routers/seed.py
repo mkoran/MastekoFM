@@ -419,8 +419,150 @@ def _seed_one(
         "output_template_id": tpl_id,
         "project_id": proj_id,
         "assumption_pack_id": pack_id,
+        # Surface the project's pack-folder id so callers (e.g. the Hello
+        # World seed) can drop additional packs alongside the canonical one.
+        "ws_packs_folder": ws_folders.get("projects"),
         **result,
     }
+
+
+def _build_helloworld_source_xlsx_bytes() -> bytes:
+    """Sprint I-1 — the demo "source of truth" file the pulled pack reads.
+
+    A single tab "Master" with the same canonical Hello World inputs
+    (a=5, b=7). When Marc edits this file in Sheets, the pulled pack picks
+    up the new values on the next Run.
+    """
+    import io as _io
+
+    import openpyxl as _xl
+    wb = _xl.Workbook()
+    wb.remove(wb.active)
+    ws = wb.create_sheet("Master")
+    ws["A1"] = "a"
+    ws["B1"] = 5
+    ws["A2"] = "b"
+    ws["B2"] = 7
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def _seed_helloworld_pulled_pack(
+    *,
+    user_token: str,
+    proj_id: str,
+    project_code: str,
+    ws_folders: dict,
+    current_user: dict,
+) -> dict:
+    """Sprint I-1 demo: a second AssumptionPack on Hello World whose values
+    come from a separate Drive xlsx via the XLSX-Link connector.
+
+    Idempotent. If `helloworld_pulled` exists already, just re-uses it. If
+    its pull_spec is missing (older seed) we patch it now.
+    """
+    log = logger
+    db = get_firestore_client()
+
+    pulled_code = "helloworld_pulled"
+    pack_id, pack_data = _find_pack_by_code(proj_id, pulled_code)
+    if pack_id and (pack_data or {}).get("pull_spec"):
+        return {"existing_pulled_pack_id": pack_id}
+
+    # 1) Ensure source xlsx exists in Drive (idempotent — find by name)
+    proj_folders = drive_service.ensure_project_folder_v2(
+        ws_folders["projects"], project_code, user_access_token=user_token,
+    )
+    pack_folder_id = drive_service.ensure_pack_folder(
+        proj_folders["packs"], pulled_code, user_access_token=user_token,
+    )
+    source_filename = "Hello World Inputs Source.xlsx"
+    existing = drive_service.list_files(pack_folder_id, user_access_token=user_token)
+    src_id = next(
+        (f["id"] for f in existing if f.get("name") == source_filename),
+        None,
+    )
+    if not src_id:
+        src_id = drive_service.upload_file(
+            pack_folder_id,
+            source_filename,
+            _build_helloworld_source_xlsx_bytes(),
+            XLSX_MIME,
+            user_access_token=user_token,
+        )
+        log.info("Sprint I-1: created source xlsx %s in folder %s", src_id, pack_folder_id)
+
+    # 2) Build the pull_spec — overlay the entire Master tab onto I_Numbers
+    pull_spec = {
+        "queries": [
+            {
+                "target": "I_Numbers",
+                "kind": "xlsx_link",
+                "config": {"drive_file_id": src_id, "sheet": "Master"},
+                "fallback": None,
+            }
+        ],
+        "on_error": "warn",
+        "cache_ttl_seconds": 0,
+    }
+
+    # 3) Create or patch the pack doc
+    now = datetime.now(UTC)
+    if pack_id:
+        db.collection(f"{_prefix()}projects").document(proj_id).collection(
+            "assumption_packs"
+        ).document(pack_id).update({"pull_spec": pull_spec, "pack_kind": "pull", "updated_at": now})
+        return {"updated_pulled_pack_id": pack_id}
+
+    next_n = 1
+    for doc in db.collection(f"{_prefix()}projects").document(proj_id).collection(
+        "assumption_packs"
+    ).stream():
+        n = (doc.to_dict() or {}).get("pack_number") or 0
+        if n > next_n:
+            next_n = n
+    next_n = min(next_n + 1, 99)
+
+    pack_ref = (
+        db.collection(f"{_prefix()}projects")
+        .document(proj_id)
+        .collection("assumption_packs")
+        .document()
+    )
+    pack_data = {
+        "name": "Hello World Inputs (pulled from Drive)",
+        "code_name": pulled_code,
+        "description": (
+            "Sprint I-1 demo: this AssumptionPack's I_Numbers tab is filled at "
+            "Run time from 'Hello World Inputs Source.xlsx' (XLSX-Link connector). "
+            "Edit that file in Drive, run again, watch values update."
+        ),
+        "project_id": proj_id,
+        "workspace_id": (db.collection(f"{_prefix()}projects").document(proj_id).get().to_dict() or {}).get("workspace_id"),
+        "pack_number": next_n,
+        "status": "active",
+        "archived": False,
+        "pack_kind": "pull",
+        "pull_spec": pull_spec,
+        "cell_overrides": None,
+        "version": 1,
+        "last_run": None,
+        # Pull packs have no underlying xlsx — but we keep the Drive folder so
+        # Marc can find the source file from the pack's "📁 Folder" link.
+        "storage_kind": "drive_xlsx",
+        "storage_path": None,
+        "drive_folder_id": pack_folder_id,
+        "drive_file_id": None,    # no pack file — values come from the source
+        "size_bytes": 0,
+        "created_by": current_user["uid"],
+        "created_by_email": current_user.get("email", ""),
+        "created_at": now,
+        "updated_at": now,
+    }
+    pack_ref.set(pack_data)
+    log.info("Sprint I-1: created pulled pack %s", pack_ref.id)
+    return {"created_pulled_pack_id": pack_ref.id}
 
 
 # ── HELLO WORLD ──────────────────────────────────────────────────────────────
@@ -463,13 +605,19 @@ def _seed_one_with_clear_errors(**kwargs):
 
 @router.post("/api/seed/helloworld")
 async def seed_helloworld(current_user: CurrentUser, request: Request):
-    """Idempotent: uploads 3 Hello World seed files + creates a Project."""
+    """Idempotent: uploads 3 Hello World seed files + creates a Project.
+
+    Sprint I-1: also seeds an additional pulled AssumptionPack
+    (``helloworld_pulled``) whose I_Numbers tab is filled at Run time from
+    a sibling Drive xlsx via the XLSX-Link connector. Demonstrates the
+    connector framework end-to-end with no extra Marc setup.
+    """
     user_token = request.headers.get("X-MFM-Drive-Token")
     if not user_token:
         raise HTTPException(
             status_code=400, detail="Hello World seed requires X-MFM-Drive-Token header.",
         )
-    return _seed_one_with_clear_errors(
+    base = _seed_one_with_clear_errors(
         seed_dir=REPO_ROOT / "seed" / "helloworld",
         model_filename="helloworld_model.xlsx",
         pack_filename="helloworld_inputs.xlsx",
@@ -492,6 +640,33 @@ async def seed_helloworld(current_user: CurrentUser, request: Request):
         narrative_docx_factory=_build_helloworld_narrative_docx_bytes,  # Sprint D-2
         narrative_template_name="Hello World Narrative",                # → Google Doc
     )
+
+    # Sprint I-1 demo pack — only when the base seed succeeded.
+    if isinstance(base, dict) and base.get("project_id") and base.get("ws_packs_folder") is not None:
+        try:
+            db = get_firestore_client()
+            ws_id = base.get("workspace_id")
+            ws_code = base.get("workspace_code", "default")
+            root = _drive_root_id()
+            ws_folders = drive_service.ensure_workspace_folders(
+                root, ws_code, user_access_token=user_token,
+            ) if root else None
+            if ws_folders:
+                pulled = _seed_helloworld_pulled_pack(
+                    user_token=user_token,
+                    proj_id=base["project_id"],
+                    project_code="helloworld",
+                    ws_folders=ws_folders,
+                    current_user=current_user,
+                )
+                base.setdefault("created", []).append(
+                    f"pulled_pack={pulled.get('created_pulled_pack_id') or pulled.get('updated_pulled_pack_id') or pulled.get('existing_pulled_pack_id')}"
+                )
+                _ = ws_id, db  # silence unused
+        except Exception as exc:  # noqa: BLE001 — pulled pack is best-effort
+            logger.warning("Sprint I-1 pulled pack seed failed (non-fatal): %s", exc, exc_info=True)
+            base.setdefault("warnings", []).append(f"pulled-pack seed skipped: {exc}")
+    return base
 
 
 # ── CAMPUS ADELE ─────────────────────────────────────────────────────────────

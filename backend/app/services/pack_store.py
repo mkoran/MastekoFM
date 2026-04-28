@@ -290,8 +290,51 @@ def load_model_bytes_compat(model: dict[str, Any], *, user_token: str | None = N
     raise ValueError("Model has neither drive_file_id nor storage_path")
 
 
-def load_pack_bytes_compat(pack: dict[str, Any], *, user_token: str | None = None) -> bytes:
-    """Load an AssumptionPack's xlsx bytes."""
+def load_pack_bytes_compat(
+    pack: dict[str, Any],
+    *,
+    user_token: str | None = None,
+    workspace_id: str | None = None,
+    run_id: str | None = None,
+) -> bytes:
+    """Load an AssumptionPack's xlsx bytes.
+
+    Sprint I — branches on ``pack_kind``:
+      * "xlsx" (default / legacy)  → Drive download as before
+      * "json"                     → synthesize from ``cell_overrides``
+      * "pull"                     → run connectors, then synthesize
+
+    For pull packs, the connector execution happens here at load time so
+    every Run gets fresh data. workspace_id and run_id flow into the
+    connector context for provenance and (future) caching.
+    """
+    pack_kind = pack.get("pack_kind", "xlsx")
+
+    if pack_kind == "json":
+        from backend.app.services.pack_synth import synthesize_pack_xlsx_from_overrides
+        overrides = pack.get("cell_overrides") or {}
+        return synthesize_pack_xlsx_from_overrides(overrides)
+
+    if pack_kind == "pull":
+        from backend.app.models.assumption_pack import PullSpec
+        from backend.app.services import connectors
+        from backend.app.services.pack_synth import synthesize_pack_xlsx_from_overrides
+
+        spec_data = pack.get("pull_spec") or {}
+        spec = PullSpec.model_validate(spec_data)
+        ctx = connectors.ConnectorContext(
+            user_drive_token=user_token,
+            workspace_id=workspace_id,
+            run_id=run_id,
+        )
+        result = connectors.execute_pull_spec(spec, ctx)
+        # Note: warnings + provenance are returned via the result object.
+        # The caller (run worker) records those on the Run doc — pack_store
+        # itself only returns bytes here. For now we drop them; Sprint I-4
+        # will plumb provenance through.
+        return synthesize_pack_xlsx_from_overrides(result.cell_writes)
+
+    # ── Default: xlsx-kind pack ────────────────────────────────────────────
     if pack.get("storage_kind") == STORAGE_KIND_DRIVE_XLSX or pack.get("drive_file_id"):
         if not pack.get("drive_file_id"):
             raise ValueError("Drive-backed pack has no drive_file_id")

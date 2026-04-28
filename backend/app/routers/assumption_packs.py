@@ -98,6 +98,10 @@ def _to_scenario(doc_id: str, data: dict[str, Any]) -> AssumptionPackResponse:
         size_bytes=data.get("size_bytes", 0),
         version=data.get("version", 1),
         last_run=data.get("last_run"),
+        # Sprint I — surface pack source kind + recipe to the UI
+        pack_kind=data.get("pack_kind", "xlsx"),
+        cell_overrides=data.get("cell_overrides"),
+        pull_spec=data.get("pull_spec"),
         created_by=data.get("created_by", ""),
         created_by_email=data.get("created_by_email"),
         created_at=data.get("created_at", datetime.now(UTC)),
@@ -114,6 +118,7 @@ def _to_summary(doc_id: str, data: dict[str, Any]) -> AssumptionPackSummary:
         pack_number=data.get("pack_number", 0),
         status=data.get("status", "active"),
         archived=_is_archived(data),
+        pack_kind=data.get("pack_kind", "xlsx"),  # Sprint I — source-kind badge
         version=data.get("version", 1),
         last_run_at=last.get("completed_at") or last.get("started_at"),
         last_run_status=last.get("status"),
@@ -273,9 +278,13 @@ async def create_scenario(
         "code_name": scenario_code,
         "description": body.description,
         "project_id": project_id,
+        "workspace_id": ws_id,                 # Sprint I — connectors need it
         "pack_number": pack_number,
         "status": "active",
         "archived": False,
+        "pack_kind": body.pack_kind,           # Sprint I (default "xlsx")
+        "cell_overrides": body.cell_overrides, # Sprint I (json)
+        "pull_spec": body.pull_spec.model_dump() if body.pull_spec else None,  # Sprint I
         "version": 1,
         "last_run": None,
         "storage_kind": pack_store.STORAGE_KIND_DRIVE_XLSX,
@@ -349,6 +358,15 @@ async def update_scenario(
         if body.status not in ("active", "archived"):
             raise HTTPException(status_code=400, detail="status must be 'active' or 'archived'")
         updates["status"] = body.status
+    # Sprint I — pack_kind / pull_spec / cell_overrides are independently
+    # editable so Marc can flip a pack from xlsx → pull → json without
+    # recreating it.
+    if body.pack_kind is not None:
+        updates["pack_kind"] = body.pack_kind
+    if body.cell_overrides is not None:
+        updates["cell_overrides"] = body.cell_overrides
+    if body.pull_spec is not None:
+        updates["pull_spec"] = body.pull_spec.model_dump()
     doc_ref.update(updates)
     return _to_scenario(scenario_id, {**doc.to_dict(), **updates})
 
