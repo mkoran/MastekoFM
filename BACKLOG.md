@@ -1,295 +1,308 @@
 # MastekoFM — Product Backlog
 
-> Last updated: 2026-04-14
-> Status: Draft — pre-Sprint 0
+> Last updated: 2026-04-25
+> Status: post-Sprint-UX-01 (bug bash + UX polish + smoke coverage shipped)
+> Total roadmap: 8 sprints (A–H) + UX-01, then a longer Phase 3 backlog
 
 ---
 
-## Domain 1: Infrastructure & DevOps
+## Sprint roadmap at a glance
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| INFRA-001 | Provision GCP project `masteko-fm` | P0 | 0 | todo |
-| INFRA-002 | Firebase project + Auth (Google Sign-In + email) | P0 | 0 | todo |
-| INFRA-003 | Cloud Run service (backend API) | P0 | 0 | todo |
-| INFRA-004 | Firebase Hosting DEV site | P0 | 0 | todo |
-| INFRA-005 | Firebase Hosting PROD site | P0 | 0 | todo |
-| INFRA-006 | Firestore database (default) | P0 | 0 | todo |
-| INFRA-007 | BigQuery dataset `masteko_fm` | P0 | 0 | todo |
-| INFRA-008 | Artifact Registry repository | P0 | 0 | todo |
-| INFRA-009 | Cloud Build trigger (push to main) | P0 | 0 | todo |
-| INFRA-010 | Secret Manager secrets (Airtable key, etc.) | P0 | 0 | todo |
-| INFRA-011 | Google Drive root folder `MastekoFM/` | P0 | 0 | todo |
-| INFRA-012 | Makefile for local dev commands | P0 | 0 | todo |
-| INFRA-013 | docker-compose.yml for local stack | P0 | 0 | todo |
-| INFRA-014 | deploy-dev.sh script | P0 | 0 | todo |
-| INFRA-015 | deploy-prod.sh script | P0 | 0 | todo |
-| INFRA-016 | cloudbuild.yaml CI pipeline | P0 | 0 | todo |
-| INFRA-017 | GitHub repo `mkoran/MastekoFM` initialized | P0 | 0 | todo |
-| INFRA-018 | CLAUDE.md with all project rules | P0 | 0 | todo |
-| INFRA-019 | Cloud Tasks queue for async jobs | P1 | 3 | todo |
-| INFRA-020 | Monitoring + alerting (Cloud Monitoring) | P2 | 5 | todo |
+| Sprint | Goal | Size | Dependencies |
+|---|---|---|---|
+| **A** | Hello World vertical slice — three-way composition runs end-to-end on tiny example | M (~5 days) | none — **✅ shipped v1.038** |
+| **B** | Cleanup + Campus Adele migration — delete ~50% of legacy code, re-seed Campus Adele under new schema | M (~3-4 days) | A approved — **✅ shipped v2.001** |
+| **A.5** | Tree Navigator — hierarchical browser (Project → Pack → Inputs/Outputs/Runs → cells) | M (~3-4 days) | B — **✅ shipped v2.003** |
+| **INFRA-001** | CI/CD via GitHub Actions + Workload Identity Federation — auto-deploy on push, no re-auth | S (~1 day) | B — **✅ scaffolding shipped, awaits Marc setup** |
+| **UX-01** | Bug bash (Create Pack 500, Calculate no-op) + UX polish (Projects/Models/Runs columns + filters + archive) + CI smoke gates for all gaps | L (~5-7 days) | A.5 — **✅ shipped v2.004** |
+| **INFRA-002** | E2E smoke (seed + run + assert Sum=12) in CI — closes Sprint UX-01's "what the bash smoke can't catch" gap | XS (~2h) | UX-01 — **✅ shipped (script + workflow); activates fully when Marc shares Drive root with deployer SA** |
+| **C** | Async runs via Cloud Tasks — POST returns 202; worker processes; UI polls. Sync-thread fallback when queue not configured | M (~4-5 days) | B — **✅ code shipped; activate per env via `./scripts/infra/setup_runs_queue.sh <env>`** |
+| **F** | KMS encryption of persisted Drive tokens (Sprint C tech debt) — new `services/secrets.py`, encrypt-on-write, decrypt-on-read, plaintext fallback if KMS unavailable | XS (~1h) | C — **✅ code shipped; activate per env via `./scripts/infra/setup_kms_drive_tokens.sh <env>`** |
+| **G1** | Workspace entity above Projects + new Drive folder hierarchy (`Workspaces/{ws}/Models/{code}/{code}_v001.xlsx`) + versioned filenames + Models in Drive (drop GCS) + per-Run output folder | M (~3-4 days) | F — **✅ backend shipped; frontend workspace context in nav; deploy pending** |
+| **G2** | UX surfaces: Models page Drive-folder column + Calculations query view + Model detail page + RunDetail folder URL + AssumptionPack revision history panel | M (~2-3 days) | G1 — ready to start after G1 deploys |
+| **D** | PDF OutputTemplates — WeasyPrint + first investor summary template for Campus Adele | S (~2-3 days) | B (can run parallel with C) |
+| **E** | Multi-user permissions — Project members, owner/editor/viewer roles, Drive sharing automation | M (~4-5 days) | B |
+| **F** | JSON AssumptionPacks + Airtable connector — schema declarations on Models, key→cell binding | L (~6-8 days) | B |
+| **G** | Sensitivity sweeps + scenario comparison UI — batch-run, tornado/heatmap | M (~4-5 days) | C |
+| **H** | Word + Google Docs OutputTemplates | M (~4-5 days) | D |
+| Phase 3 | Templates marketplace, AI-assisted modeling, monitoring, observability | XL+ | A–H |
 
-## Domain 2: Authentication & Users
+Detailed plans for each: [docs/sprints/](docs/sprints/).
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| AUTH-001 | Firebase Auth setup (Google Sign-In) | P0 | 0 | todo |
-| AUTH-002 | Auth middleware (bypass in DEV) | P0 | 0 | todo |
-| AUTH-003 | User profile creation on first login | P0 | 1 | todo |
-| AUTH-004 | User model (Firestore) | P0 | 1 | todo |
-| AUTH-005 | Login/logout flow (frontend) | P0 | 1 | todo |
-| AUTH-006 | Protected routes | P0 | 1 | todo |
-| AUTH-007 | Organization model (multi-tenant) | P1 | 8 | todo |
-| AUTH-008 | Role-based access (owner/editor/viewer) | P1 | 8 | todo |
-| AUTH-009 | Invitation system | P1 | 8 | todo |
-| AUTH-010 | Email/password auth option | P2 | 8 | todo |
+---
 
-## Domain 3: Projects
+## Status legend
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| PROJ-001 | Project Firestore model | P0 | 1 | todo |
-| PROJ-002 | Create project API | P0 | 1 | todo |
-| PROJ-003 | List projects API | P0 | 1 | todo |
-| PROJ-004 | Get project API | P0 | 1 | todo |
-| PROJ-005 | Archive project API | P0 | 1 | todo |
-| PROJ-006 | Drive folder auto-creation on project create | P0 | 1 | todo |
-| PROJ-007 | Project dashboard page (frontend) | P0 | 1 | todo |
-| PROJ-008 | Project detail/workspace page | P0 | 1 | todo |
-| PROJ-009 | Project settings page | P1 | 4 | todo |
-| PROJ-010 | Project collaborator management | P1 | 8 | todo |
-| PROJ-011 | Project duplication (clone) | P2 | 7 | todo |
+- 🚧 **in progress**
+- 🆗 **ready to start** (blocked by nothing, just need a dev)
+- 🔒 **blocked** (waiting on a dependency)
+- ✅ **shipped** (in DEV and verified)
+- ❌ **not yet planned** (placeholder)
 
-## Domain 4: Assumptions
+---
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| ASMP-001 | Assumption Firestore model | P0 | 1 | todo |
-| ASMP-002 | CRUD APIs for assumptions | P0 | 1 | todo |
-| ASMP-003 | Type validation (number, %, currency, date, text, bool) | P0 | 1 | todo |
-| ASMP-004 | Category grouping | P0 | 1 | todo |
-| ASMP-005 | Assumptions table UI (editable data grid) | P0 | 1 | todo |
-| ASMP-006 | Assumption history subcollection | P0 | 1 | todo |
-| ASMP-007 | History entry on every value change | P0 | 1 | todo |
-| ASMP-008 | Manual override (separate from source value) | P0 | 4 | todo |
-| ASMP-009 | Override indicator in UI | P0 | 4 | todo |
-| ASMP-010 | Assumption version history UI (timeline) | P1 | 4 | todo |
-| ASMP-011 | Bulk import assumptions from CSV | P1 | 2 | todo |
-| ASMP-012 | Assumption export to CSV | P2 | 4 | todo |
-| ASMP-013 | Point-in-time reconstruction | P1 | 6 | todo |
-| ASMP-014 | Assumption diff between two timestamps | P1 | 6 | todo |
+## Sprint A — Hello World vertical slice 🚧
 
-## Domain 5: Data Sources
+> Goal: prove the three-way composition pattern works end-to-end on a tiny example. Marc reviews UI before committing to deletes/async.
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| DS-001 | Data source Firestore model | P0 | 2 | todo |
-| DS-002 | CSV connector (upload + parse) | P0 | 2 | todo |
-| DS-003 | Excel connector (upload + parse) | P0 | 2 | todo |
-| DS-004 | Airtable connector (API integration) | P0 | 2 | todo |
-| DS-005 | Field discovery (list available fields from source) | P0 | 2 | todo |
-| DS-006 | Field mapping UI (source field → assumption key) | P0 | 2 | todo |
-| DS-007 | Manual sync trigger | P0 | 2 | todo |
-| DS-008 | Sync status tracking | P0 | 2 | todo |
-| DS-009 | Data source config UI | P0 | 2 | todo |
-| DS-010 | Google Sheets connector | P1 | 8 | todo |
-| DS-011 | Generic API connector (URL + auth) | P2 | 8 | todo |
-| DS-012 | Scheduled sync (cron) | P2 | 8 | todo |
-| DS-013 | Sync error handling + retry | P1 | 2 | todo |
-| DS-014 | Type inference from source data | P1 | 2 | todo |
+Detailed plan: [docs/sprints/SPRINT_A_helloworld_slice.md](docs/sprints/SPRINT_A_helloworld_slice.md)
 
-## Domain 6: Spreadsheet Templates
+| ID | Story | Size | Status |
+|---|---|---|---|
+| A-001 | Create `seed/helloworld/` with 3 .xlsx files (Model, AssumptionPack, OutputTemplate) | XS | 🆗 |
+| A-002 | Extend `excel_template_engine.classify_tabs()` to recognize `M_*` prefix | XS | 🆗 |
+| A-003 | Add `OutputTemplate` Pydantic model + Firestore schema | S | 🆗 |
+| A-004 | Add `Run` top-level Firestore model | S | 🆗 |
+| A-005 | New service `run_validator.py` — three-way compatibility checker | S | 🆗 |
+| A-006 | New service `run_executor.py` — two-stage Stage1+Stage2 pipeline | M | 🆗 |
+| A-007 | Backend router `output_templates.py` — CRUD + upload | S | 🆗 |
+| A-008 | Backend router `runs.py` — POST (sync for now), GET, list | S | 🆗 |
+| A-009 | Backend route `seed.py` — `/api/seed/helloworld` uploads the 3 files + creates Project | S | 🆗 |
+| A-010 | Frontend page `OutputTemplatesPage.tsx` — list + upload | S | 🆗 |
+| A-011 | Frontend component `NewRunModal.tsx` — three-dropdown composer with compatibility filtering | M | 🆗 |
+| A-012 | Frontend page `RunsPage.tsx` (basic) + `RunDetailPage.tsx` | S | 🆗 |
+| A-013 | Backend tests: `test_run_validator.py`, `test_run_executor.py` (use Hello World fixtures) | S | 🆗 |
+| A-014 | Layout: rename "Excel Templates" → "Models", add "Output Templates" + "Runs" nav items | XS | 🆗 |
+| A-015 | Deploy + smoke test: hit `/api/seed/helloworld`, run end-to-end via UI, verify output `.xlsx` | XS | 🆗 |
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| TPL-001 | Template Firestore model | P0 | 3 | todo |
-| TPL-002 | Template upload API (.xlsx) | P0 | 3 | todo |
-| TPL-003 | Named range discovery (inputs + outputs) | P0 | 3 | todo |
-| TPL-004 | Template validation (named ranges exist, types correct) | P0 | 3 | todo |
-| TPL-005 | Template versioning (changelog) | P0 | 3 | todo |
-| TPL-006 | Template registry UI | P0 | 3 | todo |
-| TPL-007 | Template preview (read-only grid) | P1 | 3 | todo |
-| TPL-008 | Built-in starter templates (revenue, opex, financing) | P1 | 5 | todo |
-| TPL-009 | Template marketplace (share across orgs) | P2 | 8+ | todo |
+**Definition of Done**: Marc opens https://dev-masteko-fm.web.app, navigates to Hello World project, picks Inputs+Model+OutputTemplate from three dropdowns, clicks Run, gets an `.xlsx` with `O_Report` showing Sum=12, Product=35, Total=47.
 
-## Domain 7: Excel Engine
+**Out of scope**:
+- Deleting legacy code (Sprint B)
+- Async execution (Sprint C)
+- PDF/Word/GoogleDoc renderers (Sprints D/H)
+- Multi-user permissions (Sprint E)
+- JSON AssumptionPacks (Sprint F)
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| EXL-001 | openpyxl read/write named ranges | P0 | 3 | todo |
-| EXL-002 | Inject assumption values into input cells | P0 | 3 | todo |
-| EXL-003 | Formula evaluation (openpyxl formulas lib) | P0 | 3 | todo |
-| EXL-004 | Extract output values from named ranges | P0 | 3 | todo |
-| EXL-005 | LibreOffice headless fallback for complex formulas | P1 | 4 | todo |
-| EXL-006 | Error handling (circular refs, #VALUE, #REF) | P0 | 3 | todo |
-| EXL-007 | Calculation timing + logging to BigQuery | P1 | 4 | todo |
-| EXL-008 | Support for XIRR, XNPV, other financial functions | P1 | 4 | todo |
-| EXL-009 | Multi-sheet workbook support | P1 | 5 | todo |
+---
 
-## Domain 8: DAG (Spreadsheet Waterfall)
+## Sprint B — Cleanup + Campus Adele migration
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| DAG-001 | DAG data model (nodes + edges in Firestore) | P0 | 3 | todo |
-| DAG-002 | Cycle detection on edge creation | P0 | 3 | todo |
-| DAG-003 | Topological sort | P0 | 3 | todo |
-| DAG-004 | Cascade recalculation (execute DAG in order) | P0 | 3 | todo |
-| DAG-005 | Output→input mapping (wire sheet outputs to downstream inputs) | P0 | 4 | todo |
-| DAG-006 | Partial recalculation (only dirty nodes) | P1 | 4 | todo |
-| DAG-007 | Error propagation (mark downstream as stale) | P0 | 4 | todo |
-| DAG-008 | DAG editor UI (React Flow) | P0 | 3 | todo |
-| DAG-009 | Node drag + position persistence | P0 | 3 | todo |
-| DAG-010 | Edge drawing (connect output port → input port) | P0 | 3 | todo |
-| DAG-011 | Node status indicators (idle/calculating/error/stale) | P0 | 4 | todo |
-| DAG-012 | Manual recalculation trigger (per sheet or full DAG) | P0 | 4 | todo |
-| DAG-013 | Async recalculation via Cloud Tasks | P1 | 5 | todo |
+> Goal: delete the ~50% of code that's now dead. Re-seed Campus Adele under the new schema. Single source of truth.
 
-## Domain 9: Reports & PDF Generation
+Detailed plan: [docs/sprints/SPRINT_B_cleanup_and_migration.md](docs/sprints/SPRINT_B_cleanup_and_migration.md)
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| RPT-001 | Report Firestore model | P0 | 5 | todo |
-| RPT-002 | Report template system (HTML/CSS) | P0 | 5 | todo |
-| RPT-003 | Data binding (map sections to outputs/assumptions) | P0 | 5 | todo |
-| RPT-004 | Chart generation (data → PNG) | P0 | 5 | todo |
-| RPT-005 | PDF generation (WeasyPrint) | P0 | 5 | todo |
-| RPT-006 | Store generated PDF in Google Drive | P0 | 5 | todo |
-| RPT-007 | Report builder UI (template + bindings) | P0 | 5 | todo |
-| RPT-008 | Report list + download UI | P0 | 5 | todo |
-| RPT-009 | Branded cover pages | P1 | 5 | todo |
-| RPT-010 | Table of contents generation | P1 | 5 | todo |
-| RPT-011 | Investor package report template | P1 | 5 | todo |
-| RPT-012 | Lender package report template | P1 | 5 | todo |
-| RPT-013 | Custom report template upload | P2 | 7 | todo |
+| ID | Story | Size | Status |
+|---|---|---|---|
+| B-001 | Delete legacy backend models: `template.py`, `template_group.py`, `assumption.py`, `datasource.py`, `dag.py`, legacy `project.py`, `report.py` | XS | 🔒 (waiting on A) |
+| B-002 | Delete legacy routers: `templates.py`, `template_groups.py`, `assumptions.py`, legacy `projects.py`, `datasources.py`, `dag.py`, `spreadsheets.py`, `reports.py` | S | 🔒 |
+| B-003 | Delete legacy services: `dag_executor.py`, datasource sync, assumption_engine | S | 🔒 |
+| B-004 | Delete legacy frontend pages: `Dashboard.tsx`, `TemplatesPage.tsx`, `TemplateGroupsPage.tsx`, `ScenarioEditor.tsx`, `AssumptionsTable.tsx`, `DataSourceConfig.tsx`, `DAGEditor.tsx`, `ReportBuilder.tsx`, legacy `ProjectView.tsx` | S | 🔒 |
+| B-005 | Remove `?legacy=1` flag and all branches of it from `Layout.tsx` | XS | 🔒 |
+| B-006 | Delete legacy tests: TGV, datasource, dag, table_assumptions, checkout, etc. | XS | 🔒 |
+| B-007 | Rename: `ExcelTemplate→Model`, `Scenario→AssumptionPack`, `ExcelProject→Project`, `excel_template_engine` stays (well-named), `scenario_store→pack_store` | S | 🔒 |
+| B-008 | Firestore migration script: drop `dev_assumption_templates`, `dev_template_groups`, legacy `dev_projects/*/tgv`, `dev_projects/*/assumptions`, `dev_projects/*/datasources`, `dev_projects/*/spreadsheets` | S | 🔒 |
+| B-009 | Delete the existing GCS-backed Optimistic + Base scenarios (old composition; no value preserved) | XS | 🔒 |
+| B-010 | Build `seed/campus_adele/`: Model file, BaseCase AssumptionPack, default OutputTemplate (mirror of full workbook for now) | S | 🔒 |
+| B-011 | `/api/seed/campus-adele` rewrites to upload 3 files + create Project under new schema | S | 🔒 |
+| B-012 | Tag and bump VERSION to v2.000 (signals architectural pivot) | XS | 🔒 |
+| B-013 | Deploy + smoke test: re-seed Campus Adele, run with Base AssumptionPack + Campus Adele Model + default OutputTemplate, verify output matches pre-cleanup | XS | 🔒 |
+| B-014 | Update SESSION_HANDOFF.md, ARCHITECTURE.md "Last reviewed" markers, README.md if needed | XS | 🔒 |
 
-## Domain 10: Versioning & Scenarios
+**Definition of Done**: ~50% of source code deleted, no legacy references in nav or routers, Campus Adele runs successfully under new schema, all tests green, DEV deploys clean at v2.000.
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| VER-001 | Project snapshot (freeze all values) | P0 | 6 | todo |
-| VER-002 | Snapshot naming + metadata | P0 | 6 | todo |
-| VER-003 | Snapshot list UI | P0 | 6 | todo |
-| VER-004 | Snapshot comparison (side-by-side diff) | P1 | 6 | todo |
-| VER-005 | Template version upgrade path | P1 | 6 | todo |
-| VER-006 | Scenario manager (named override sets) | P1 | 7 | todo |
-| VER-007 | Restore project to snapshot | P2 | 6 | todo |
+**Out of scope**: Async (Sprint C). Sensitivity (Sprint G).
 
-## Domain 11: Analysis Tools
+---
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| ANL-001 | Sensitivity analysis (one-variable) | P1 | 7 | todo |
-| ANL-002 | Sensitivity chart (tornado diagram) | P1 | 7 | todo |
-| ANL-003 | Two-variable data table | P2 | 7 | todo |
-| ANL-004 | Dashboard KPI cards | P1 | 7 | todo |
-| ANL-005 | Trend charts across scenarios | P1 | 7 | todo |
-| ANL-006 | Full model export as single .xlsx workbook | P1 | 7 | todo |
-| ANL-007 | Monte Carlo simulation | P2 | 8+ | todo |
+## Sprint C — Async runs via Cloud Tasks
 
-## Domain 12: Frontend Shell
+> Goal: POST /api/runs returns 202 immediately, worker processes in background, frontend polls status. Foundation for sensitivity sweeps and 100+ concurrent.
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| FE-001 | React + TypeScript + Vite + Tailwind setup | P0 | 0 | todo |
-| FE-002 | Routing (React Router) | P0 | 0 | todo |
-| FE-003 | Auth context + protected routes | P0 | 1 | todo |
-| FE-004 | API client service (axios/fetch wrapper) | P0 | 1 | todo |
-| FE-005 | Navigation layout (sidebar + header) | P0 | 1 | todo |
-| FE-006 | Loading states + error boundaries | P0 | 1 | todo |
-| FE-007 | Toast notifications | P1 | 2 | todo |
-| FE-008 | Dark mode support | P2 | 7 | todo |
+Detailed plan: [docs/sprints/SPRINT_C_async_runs.md](docs/sprints/SPRINT_C_async_runs.md)
 
-## Domain 13: Google Drive Integration
+| ID | Story | Size | Status |
+|---|---|---|---|
+| C-001 | Create Cloud Tasks queue `mfm-runs-dev` and `mfm-runs-prod` (Terraform or one-shot script) | S | 🔒 |
+| C-002 | Create second Cloud Run service `masteko-fm-worker-dev` from same image, different `--command` | S | 🔒 |
+| C-003 | New router `internal_runs.py` — `/internal/tasks/run/{run_id}` endpoint, OIDC-only auth | S | 🔒 |
+| C-004 | Wire `/api/runs` POST to enqueue Cloud Task; return 202 with `run_id` | S | 🔒 |
+| C-005 | Worker handler: pull Run doc → run_executor → update Run status | S | 🔒 |
+| C-006 | Cloud Tasks retry config: 3 attempts, exponential backoff | XS | 🔒 |
+| C-007 | Frontend: polling component for Run status (Firestore onSnapshot or 2s poll) | S | 🔒 |
+| C-008 | Frontend: "Cancel run" button (sets status=cancelled, worker checks before starting) | XS | 🔒 |
+| C-009 | Frontend: "Retry" button on failed runs → POST /api/runs/{id}/retry | XS | 🔒 |
+| C-010 | Cloud Run worker: separate IAM service account with Drive + Firestore + GCS perms | S | 🔒 |
+| C-011 | Tests: mock Cloud Tasks, integration test for full enqueue→execute→status flow | M | 🔒 |
+| C-012 | Update deploy-dev.sh to deploy both services (api + worker) from same image | S | 🔒 |
+| C-013 | Smoke test: launch 5 concurrent runs, verify all complete | XS | 🔒 |
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| GD-001 | Drive API service (auth + CRUD) | P0 | 1 | todo |
-| GD-002 | Folder creation per project | P0 | 1 | todo |
-| GD-003 | File upload (xlsx, csv) | P0 | 2 | todo |
-| GD-004 | File download | P0 | 2 | todo |
-| GD-005 | File listing per project folder | P1 | 2 | todo |
-| GD-006 | Permission management (share with collaborators) | P2 | 8 | todo |
+**Definition of Done**: Hello World run takes <500ms to POST and return; status updates from pending→running→completed within 5s; 5 concurrent runs all succeed; failed runs retry with backoff; UI shows live status.
 
-## Domain 14: Observability & Logging
+---
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| OBS-001 | Structured logging (Cloud Logging) | P0 | 0 | todo |
-| OBS-002 | Health check endpoints (/health, /api/health/full) | P0 | 0 | todo |
-| OBS-003 | Calculation audit log (BigQuery) | P1 | 4 | todo |
-| OBS-004 | API request logging | P1 | 1 | todo |
-| OBS-005 | Error tracking + alerting | P2 | 5 | todo |
+## Sprint D — PDF OutputTemplates
 
-## Domain 15: Checkout & Concurrency
+> Goal: render OutputTemplates as PDF via WeasyPrint. First investor summary report for Campus Adele.
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| CHK-001 | Checkout data model (project-level lock) | P0 | 1 | todo |
-| CHK-002 | Checkout API (acquire / release / force-release) | P0 | 1 | todo |
-| CHK-003 | 423 Locked response on all write endpoints when checked out | P0 | 1 | todo |
-| CHK-004 | Auto-expiry of stale checkouts (default 2 hours) | P0 | 1 | todo |
-| CHK-005 | Checkout banner UI (who has it, time remaining) | P0 | 1 | todo |
-| CHK-006 | "Check out to edit" flow in frontend | P0 | 1 | todo |
-| CHK-007 | Force-release by owner (UI + API) | P1 | 2 | todo |
-| CHK-008 | Inactivity prompt (auto-checkin after idle period) | P1 | 4 | todo |
-| CHK-009 | Per-sheet checkout (granular locking) | P2 | 8+ | todo |
-| CHK-010 | Checkout audit trail (BigQuery) | P1 | 4 | todo |
+Detailed plan: [docs/sprints/SPRINT_D_pdf_outputs.md](docs/sprints/SPRINT_D_pdf_outputs.md)
 
-## Domain 16: Spreadsheet Editing & Versioning
+| ID | Story | Size | Status |
+|---|---|---|---|
+| D-001 | Add WeasyPrint to backend requirements + Dockerfile | XS | 🔒 |
+| D-002 | New `OutputTemplate.format` field — `"xlsx" \| "pdf"` (others later) | XS | 🔒 |
+| D-003 | New `services/output_renderers/pdf_renderer.py` — HTML/CSS template + Model output bindings | M | 🔒 |
+| D-004 | OutputTemplate stores HTML/CSS as a .zip in Drive (template + assets); validator checks for `{{ binding }}` placeholders | S | 🔒 |
+| D-005 | run_executor branches on output_template.format → calls right renderer | S | 🔒 |
+| D-006 | Build `seed/campus_adele/investor_summary/` — HTML+CSS template with charts + tables | M | 🔒 |
+| D-007 | Frontend: OutputTemplate upload UI accepts .zip for PDF format | S | 🔒 |
+| D-008 | Test: render Campus Adele PDF, verify file size + first-page render | S | 🔒 |
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| SED-001 | Download current .xlsx (with injected values) | P0 | 4 | todo |
-| SED-002 | Re-upload modified .xlsx | P0 | 4 | todo |
-| SED-003 | Named range re-discovery on upload | P0 | 4 | todo |
-| SED-004 | Mapping change confirmation UI | P0 | 4 | todo |
-| SED-005 | Sheet version history (per-sheet versions subcollection) | P0 | 4 | todo |
-| SED-006 | Rollback to previous sheet version | P1 | 6 | todo |
-| SED-007 | Sheet version diff (which named ranges changed) | P1 | 6 | todo |
-| SED-008 | File size validation (10MB max) | P0 | 4 | todo |
-| SED-009 | In-browser spreadsheet editor (Luckysheet / Handsontable) | P2 | 8+ | todo |
+**Definition of Done**: User can upload an HTML/CSS PDF template, run with Campus Adele Model + Base AssumptionPack, download a real PDF investor summary.
 
-## Domain 17: Data Source Push-back
+---
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| DS-015 | Airtable write-back connector | P2 | 8+ | todo |
-| DS-016 | Configurable push-back mappings (outputs → Airtable fields) | P2 | 8+ | todo |
-| DS-017 | Push-back trigger options (manual / on-recalc / scheduled) | P2 | 8+ | todo |
-| DS-018 | Google Sheets write-back connector | P2 | 8+ | todo |
+## Sprint E — Multi-user permissions
 
-## Domain 18: Template Marketplace (future)
+> Goal: Project membership, role-based access, Drive folder sharing, last-admin protection.
 
-| ID | Item | Priority | Sprint | Status |
-|---|---|---|---|---|
-| MKT-001 | Publish template to marketplace | P2 | 8+ | todo |
-| MKT-002 | Browse / search marketplace templates | P2 | 8+ | todo |
-| MKT-003 | Import marketplace template into project | P2 | 8+ | todo |
-| MKT-004 | Template ratings + usage stats | P2 | 8+ | todo |
+Detailed plan: [docs/sprints/SPRINT_E_multi_user.md](docs/sprints/SPRINT_E_multi_user.md)
+
+| ID | Story | Size | Status |
+|---|---|---|---|
+| E-001 | Project model gains `members: [{uid, role, email, added_at, added_by}]`; roles = owner/editor/viewer | S | 🔒 |
+| E-002 | Auth middleware checks project membership for project-scoped endpoints | M | 🔒 |
+| E-003 | Last-admin protection: cannot remove last owner from a project | XS | 🔒 |
+| E-004 | Frontend: Project Settings tab — invite members by email, change role, remove | M | 🔒 |
+| E-005 | Backend: when adding a member, share their Project's Drive folder with them via Drive API | S | 🔒 |
+| E-006 | UI gating: viewers can see Runs but not start them; editors can; owners can manage members | S | 🔒 |
+| E-007 | Audit log entry on every membership change | S | 🔒 |
+| E-008 | Tests: each role × each protected operation | M | 🔒 |
+
+**Definition of Done**: Marc invites a teammate, teammate signs in and sees only the projects they're a member of; viewer can't start a run; owner can remove the editor; cannot remove last owner.
+
+---
+
+## Sprint F — JSON AssumptionPacks + Airtable connector
+
+> Goal: support non-Excel data sources. Model declares `input_schema` mapping JSON keys to cells. Airtable as the first connector.
+
+Detailed plan: [docs/sprints/SPRINT_F_json_assumptions.md](docs/sprints/SPRINT_F_json_assumptions.md)
+
+| ID | Story | Size | Status |
+|---|---|---|---|
+| F-001 | Model gains `input_schema: [{key, cell_ref, type, label}]` declarative binding | S | 🔒 |
+| F-002 | New `AssumptionPack.format` field — `"xlsx" \| "json"` | XS | 🔒 |
+| F-003 | JSON pack storage: stored as Firestore doc OR as `.json` file in Drive | S | 🔒 |
+| F-004 | run_executor: when pack is JSON, iterate Model.input_schema, inject by cell_ref using openpyxl | M | 🔒 |
+| F-005 | Frontend: per-Model "Input schema editor" — declare keys + cell refs | M | 🔒 |
+| F-006 | Frontend: "New JSON pack" form — auto-generated from Model.input_schema | M | 🔒 |
+| F-007 | Airtable connector service: pulls a base + table, snapshots into a versioned JSON pack | L | 🔒 |
+| F-008 | Connector config UI: API key (Secret Manager), base ID, table, field mappings | M | 🔒 |
+| F-009 | Manual sync button + scheduled sync (Cloud Scheduler) | M | 🔒 |
+| F-010 | Tests: JSON pack injection into Hello World Model | S | 🔒 |
+| F-011 | Tests: Airtable connector with mocked API | M | 🔒 |
+
+**Definition of Done**: User defines input schema for Hello World Model; creates a JSON pack via form; runs and sees the same output as the .xlsx pack. Separately: configures an Airtable base; runs sync; resulting JSON pack feeds a Run.
+
+---
+
+## Sprint G — Sensitivity sweeps + comparison UI
+
+> Goal: vary inputs systematically, run N variants, compare outputs.
+
+Detailed plan: [docs/sprints/SPRINT_G_sensitivity_sweeps.md](docs/sprints/SPRINT_G_sensitivity_sweeps.md)
+
+| ID | Story | Size | Status |
+|---|---|---|---|
+| G-001 | Backend: `Sweep` Firestore model — base_pack_id, variations: [{label, cell_ref, delta_type, delta}], output_keys | S | 🔒 |
+| G-002 | Backend service: materialize a Sweep into N AssumptionPacks (programmatic openpyxl mutation) | M | 🔒 |
+| G-003 | Backend: POST /api/sweeps creates Sweep + enqueues N Runs (uses Sprint C async) | S | 🔒 |
+| G-004 | Backend: `/api/sweeps/{id}/results` aggregates output values across runs | S | 🔒 |
+| G-005 | Frontend: Sweep builder — variation editor, output picker, launch | M | 🔒 |
+| G-006 | Frontend: Tornado chart (Recharts) for one-variable sweep | S | 🔒 |
+| G-007 | Frontend: Heatmap for two-variable sweep (later, optional) | M | 🔒 |
+| G-008 | Frontend: Run comparison view — side-by-side cell diff between any 2-N runs | M | 🔒 |
+| G-009 | Tests: sweep materialization with Hello World Model + 5 variations | S | 🔒 |
+
+**Definition of Done**: User picks Campus Adele Base, declares "vary `Construction Duration` from 12 to 16 in steps of 1", clicks Sweep — 5 runs queued, completes in ~1 min, tornado chart shows IRR sensitivity to Construction Duration.
+
+---
+
+## Sprint H — Word + Google Docs OutputTemplates
+
+> Goal: third and fourth output formats for completeness.
+
+Detailed plan: [docs/sprints/SPRINT_H_word_googledocs.md](docs/sprints/SPRINT_H_word_googledocs.md)
+
+| ID | Story | Size | Status |
+|---|---|---|---|
+| H-001 | Add `python-docx` to backend requirements | XS | 🔒 |
+| H-002 | New `services/output_renderers/docx_renderer.py` — placeholder substitution into .docx template | M | 🔒 |
+| H-003 | OutputTemplate.format = `"docx"` accepted; storage = Drive .docx | S | 🔒 |
+| H-004 | Build `seed/campus_adele/lender_package.docx` template | S | 🔒 |
+| H-005 | Add Google Docs API client (already enabled) | XS | 🔒 |
+| H-006 | New `services/output_renderers/gdoc_renderer.py` — copy template Doc, fill placeholders via Docs API | M | 🔒 |
+| H-007 | OutputTemplate.format = `"google_doc"`; storage = Drive Doc | S | 🔒 |
+| H-008 | Frontend: format-aware upload UI per OutputTemplate type | S | 🔒 |
+| H-009 | Tests: docx + gdoc renderer end-to-end with Hello World | S | 🔒 |
+
+**Definition of Done**: User uploads a .docx OutputTemplate, runs Campus Adele, downloads a Word doc with substituted values. Same for a Google Doc template — output appears in user's Drive as a real Doc.
+
+---
+
+## Phase 3 — Long-term backlog
+
+These are not yet sprint-planned. Each will be turned into a Sprint when we have user pull.
+
+### Templates marketplace
+- P3-001 Publish a Model or OutputTemplate to a workspace-wide library
+- P3-002 Browse + clone marketplace templates into your project
+- P3-003 Versioning across the marketplace (semver-style)
+- P3-004 Ratings + usage metrics
+
+### AI-assisted modeling
+- P3-010 "What if I changed X by Y%" natural-language sensitivity via LLM → Sweep
+- P3-011 Suggest input value ranges based on historical data
+- P3-012 Auto-detect Model output dependencies on inputs (formula introspection)
+
+### Observability + monitoring
+- P3-020 Run duration histogram per Model, alert on regressions
+- P3-021 Per-user usage metrics
+- P3-022 Cost attribution: which Models/Templates burn the most LibreOffice CPU
+- P3-023 Cloud Logging structured logs + log-based metrics
+- P3-024 Error tracking integration (Sentry / Cloud Error Reporting)
+
+### Categories + Dimensions (deferred per redesign decision)
+- P3-030 First-class category metadata on AssumptionPack tabs (e.g., "Revenue", "Costs")
+- P3-031 Dimensional rollups (project × scenario × time)
+- P3-032 Cross-project queries: "all Runs of Construction-to-Perm v3 across all projects"
+
+### Templates contract + advanced engine
+- P3-040 Sheet diffing (xltrail-like, but free) using Drive revision IDs
+- P3-041 Template-author lint: warn if I_ tabs contain cross-tab formula refs
+- P3-042 Pivot table support inside calc tabs
+- P3-043 Array formula support for I_/M_ injection
+
+### Infrastructure hardening
+- P3-050 Cloud Run min-instances tuning + warm pool for fast cold starts
+- P3-051 Multi-region failover
+- P3-052 Backup + restore for Firestore + Drive
+- P3-053 Per-user rate limiting on /api/runs (prevent runaway sweeps)
 
 ---
 
 ## Backlog summary
 
-| Domain | P0 | P1 | P2 | Total |
-|---|---|---|---|---|
-| Infrastructure | 17 | 1 | 1 | 20 |
-| Auth & Users | 6 | 2 | 2 | 10 |
-| Projects | 8 | 1 | 2 | 11 |
-| Assumptions | 9 | 3 | 2 | 14 |
-| Data Sources | 9 | 3 | 2 | 14 |
-| Templates | 6 | 2 | 1 | 9 |
-| Excel Engine | 5 | 3 | 0 | 9 |
-| DAG | 9 | 3 | 0 | 13 |
-| Reports | 8 | 4 | 1 | 13 |
-| Versioning | 3 | 2 | 2 | 7 |
-| Analysis | 0 | 4 | 3 | 7 |
-| Frontend Shell | 6 | 1 | 1 | 8 |
-| Google Drive | 4 | 1 | 1 | 6 |
-| Observability | 2 | 2 | 1 | 5 |
-| Checkout & Concurrency | 6 | 2 | 2 | 10 |
-| Spreadsheet Editing | 5 | 2 | 2 | 9 |
-| Data Source Push-back | 0 | 0 | 4 | 4 |
-| Template Marketplace | 0 | 0 | 4 | 4 |
-| **Total** | **103** | **36** | **31** | **173** |
+| Sprint | P0 stories | P1 stories | Total |
+|---|---|---|---|
+| A | 15 | 0 | 15 |
+| B | 14 | 0 | 14 |
+| C | 13 | 0 | 13 |
+| D | 8 | 0 | 8 |
+| E | 8 | 0 | 8 |
+| F | 11 | 0 | 11 |
+| G | 9 | 0 | 9 |
+| H | 9 | 0 | 9 |
+| **Total** | **87** | **0** | **87** |
+| Phase 3 | n/a | many | ~30 placeholders |
+
+---
+
+## Conventions
+
+- Story IDs: `{SPRINT}-{NNN}` (e.g., `A-007`, `C-013`)
+- Story sizes: `XS` (<2h), `S` (half day), `M` (1–2 days), `L` (3–4 days), `XL` (1 week+)
+- An epic containing an XL story should be split before starting (per CLAUDE.md)
+- Each sprint is on its own branch: `epic/sprint-{letter}-{name}` (e.g., `epic/sprint-a-helloworld`)
+- Merge with `--no-ff` to preserve sprint boundaries
