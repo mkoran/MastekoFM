@@ -173,6 +173,20 @@ def _seed_one(
     # ── 2. OutputTemplate (Drive-backed; per-template folder; Sprint G1) ────
     tpl_id, tpl_data = _find_by_code(f"{_prefix()}output_templates", template_code)
     if tpl_id:
+        # Idempotent flag-patch: keep an existing OutputTemplate's behaviour
+        # in sync with what the seed declares today. Without this, an old
+        # Hello World seed (pre-Sprint D-1) would never produce PDFs unless
+        # Marc wiped + reseeded.
+        patch: dict[str, Any] = {}
+        if (tpl_data or {}).get("pdf_export_xlsx") != pdf_export_xlsx:
+            patch["pdf_export_xlsx"] = pdf_export_xlsx
+        if patch:
+            patch["updated_at"] = now
+            db.collection(f"{_prefix()}output_templates").document(tpl_id).update(patch)
+            result["updated"] = result.get("updated", [])
+            result["updated"].append(
+                f"output_template={tpl_id}: " + ", ".join(f"{k}={v}" for k, v in patch.items() if k != "updated_at")
+            )
         result["existing"].append(f"output_template={tpl_id}")
     else:
         content = tpl_path.read_bytes()
