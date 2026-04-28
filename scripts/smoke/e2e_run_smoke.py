@@ -154,24 +154,38 @@ def run_e2e(api_base: str, auth_token: str, drive_token: str) -> int:
     except urllib.error.HTTPError as exc:
         # SA storage-quota: same Drive limitation that affects run outputs.
         # Personal Drives reject SA-owned files. Real users have quota; CI doesn't.
-        # Treat as soft pass with a clear WARN — engine integration is not exercised.
+        # Sprint M: this soft-pass is gated by ALLOW_SA_QUOTA_SOFT_PASS=1 so we
+        # can drop it the moment the Drive root is moved into a Shared Drive.
+        # Without the env var, hard-fail like any other 5xx.
         body_text = getattr(exc, "_body_text", "") or ""
         try:
             body = json.loads(body_text) if body_text else {}
             detail = str(body.get("detail", body_text))
         except Exception:  # noqa: BLE001
             detail = body_text
-        # New explicit 403 from seed handler, or legacy 500. Match either.
-        if (exc.code in (500, 403)) and (
+        soft_pass_allowed = os.environ.get("ALLOW_SA_QUOTA_SOFT_PASS") == "1"
+        is_quota_error = (exc.code in (500, 403)) and (
             "storageQuotaExceeded" in detail or "storage quota" in detail.lower()
-        ):
+        )
+        if soft_pass_allowed and is_quota_error:
             print(
                 "  WARN: seed failed with SA storage-quota limitation. Engine NOT verified.\n"
-                "  Migrate the MastekoFM Drive root into a Shared Drive to unblock CI E2E.",
+                "  This soft-pass is enabled by ALLOW_SA_QUOTA_SOFT_PASS=1 (drop it once\n"
+                "  the Drive root is in a Shared Drive — see scripts/migrate/move_to_shared_drive.py).",
                 file=sys.stderr,
             )
             print("  ✓ Soft pass — CI infra unaffected; user-facing UI uses user token (works).")
             return 0
+        if is_quota_error and not soft_pass_allowed:
+            print(
+                f"  FAIL: SA storage-quota error and ALLOW_SA_QUOTA_SOFT_PASS not set.\n"
+                f"        Either:\n"
+                f"          - move the Drive root into a Shared Drive (Sprint M), OR\n"
+                f"          - re-enable the soft-pass with ALLOW_SA_QUOTA_SOFT_PASS=1\n"
+                f"        Detail: {detail[:300]}",
+                file=sys.stderr,
+            )
+            return 1
         # Other HTTP errors are real failures.
         print(f"  FAIL: seed HTTP {exc.code} {detail[:300]}", file=sys.stderr)
         return 1
@@ -231,13 +245,23 @@ def run_e2e(api_base: str, auth_token: str, drive_token: str) -> int:
     # without the bytes.
     output_url = run.get("output_download_url")
     if not output_url:
+        soft_pass_allowed = os.environ.get("ALLOW_SA_QUOTA_SOFT_PASS") == "1"
+        if soft_pass_allowed:
+            print(
+                "  WARN: run completed but output_download_url is null — likely SA "
+                "storage-quota limitation. Engine math NOT verified.\n"
+                "  Soft-pass enabled by ALLOW_SA_QUOTA_SOFT_PASS=1.",
+                file=sys.stderr,
+            )
+            print("  ✓ Run completed (output not persisted, see WARN above)")
+            return 0
         print(
-            "  WARN: run completed but output_download_url is null — likely SA "
-            "storage-quota limitation. Engine math NOT verified.",
+            "  FAIL: run completed but output_download_url is null. Without the\n"
+            "  ALLOW_SA_QUOTA_SOFT_PASS=1 escape hatch this is a hard failure —\n"
+            "  most likely the Drive root is still in a personal Drive (Sprint M).",
             file=sys.stderr,
         )
-        print("  ✓ Run completed (output not persisted, see WARN above)")
-        return 0
+        return 1
     print(f"  Downloading output: {output_url}")
     try:
         output_bytes = _download(output_url)
