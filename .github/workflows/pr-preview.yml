@@ -37,9 +37,13 @@ jobs:
 
       - name: Deploy preview channel
         # ADC from WIF — channel id = pr-<number>, expires 7d. No long-lived secrets.
+        # Use --site (concrete site id) instead of --only hosting:dev because
+        # `hosting:channel:deploy` does not resolve target names from .firebaserc
+        # the same way `deploy` does (see #issue: "Hosting site or target
+        # hosting:dev not detected in firebase.json").
         run: |
           npx firebase-tools@latest hosting:channel:deploy "pr-${{ github.event.number }}" \
-            --only hosting:dev \
+            --site dev-masteko-fm \
             --project ${{ vars.GCP_PROJECT_ID }} \
             --expires 7d \
             --non-interactive
