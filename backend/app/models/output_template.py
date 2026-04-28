@@ -24,6 +24,8 @@ class OutputTemplateSummary(BaseModel):
     archived: bool = False  # Sprint UX-01
     drive_url: str | None = None  # Sprint UX-01
     created_by_email: str | None = None  # Sprint UX-01
+    pdf_export_xlsx: bool = False           # Sprint D-1
+    google_doc_template_drive_file_id: str | None = None  # Sprint D-2
     created_at: datetime
     updated_at: datetime
 
@@ -48,6 +50,15 @@ class OutputTemplateResponse(BaseModel):
     archived: bool = False  # Sprint UX-01
     uploaded_by: str
     uploaded_by_email: str | None = None  # Sprint UX-01
+    # Sprint D-1: When True, every Run that uses this template also produces a
+    # PDF rendered from the resulting xlsx via LibreOffice (soffice --convert-to
+    # pdf). The PDF lands alongside the xlsx in the per-run Drive folder.
+    pdf_export_xlsx: bool = False
+    # Sprint D-2: Optional Google Doc template id (lives in Drive). When set,
+    # the run worker copies this Doc, fills `{{model.O_<tab>.<cell>}}`
+    # placeholders with the Model's output values, then exports the result as
+    # PDF into the per-run Drive folder.
+    google_doc_template_drive_file_id: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -59,3 +70,5 @@ class OutputTemplateUpdate(BaseModel):
     code_name: str | None = None
     description: str | None = None
     archived: bool | None = None  # Sprint UX-01
+    pdf_export_xlsx: bool | None = None                       # Sprint D-1
+    google_doc_template_drive_file_id: str | None = None      # Sprint D-2

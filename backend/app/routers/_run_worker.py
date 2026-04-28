@@ -24,6 +24,8 @@ from typing import Any
 from backend.app.config import get_firestore_client, settings
 from backend.app.services import (
     drive_service,
+    excel_engine,
+    narrative_pdf_service,
     pack_store,
     run_executor,
     storage_service,
@@ -34,11 +36,66 @@ from backend.app.services import (
 
 logger = logging.getLogger(__name__)
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+PDF_MIME = "application/pdf"
 TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 
 
 def _runs_ref():
     return get_firestore_client().collection(f"{settings.firestore_collection_prefix}runs")
+
+
+def _build_artifacts(
+    *,
+    xlsx_drive_file_id: str | None,
+    xlsx_filename: str,
+    xlsx_size_bytes: int,
+    xlsx_download_url: str | None,
+    pdf_drive_file_id: str | None = None,
+    pdf_filename: str | None = None,
+    pdf_size_bytes: int = 0,
+    google_doc_pdf_drive_file_id: str | None = None,
+    google_doc_pdf_filename: str | None = None,
+    google_doc_pdf_size_bytes: int = 0,
+) -> list[dict[str, Any]]:
+    """Compose the ``output_artifacts`` list on a Run doc.
+
+    One entry per artifact produced. Today: xlsx (always when Drive OK), PDF
+    rendered from xlsx (Sprint D-1, opt-in via ``pdf_export_xlsx``), narrative
+    PDF rendered from a Google Doc template (Sprint D-2, opt-in via
+    ``google_doc_template_drive_file_id``).
+    """
+    artifacts: list[dict[str, Any]] = []
+    if xlsx_drive_file_id:
+        artifacts.append({
+            "format": "xlsx",
+            "kind": "spreadsheet",
+            "filename": xlsx_filename,
+            "drive_file_id": xlsx_drive_file_id,
+            "download_url": xlsx_download_url,
+            "edit_url": f"https://docs.google.com/spreadsheets/d/{xlsx_drive_file_id}/edit",
+            "size_bytes": xlsx_size_bytes,
+        })
+    if pdf_drive_file_id and pdf_filename:
+        artifacts.append({
+            "format": "pdf",
+            "kind": "spreadsheet_pdf",  # Sprint D-1: rendered from the xlsx
+            "filename": pdf_filename,
+            "drive_file_id": pdf_drive_file_id,
+            "download_url": f"https://drive.google.com/uc?id={pdf_drive_file_id}&export=download",
+            "edit_url": f"https://drive.google.com/file/d/{pdf_drive_file_id}/view",
+            "size_bytes": pdf_size_bytes,
+        })
+    if google_doc_pdf_drive_file_id and google_doc_pdf_filename:
+        artifacts.append({
+            "format": "pdf",
+            "kind": "narrative_pdf",  # Sprint D-2: from the Google Doc template
+            "filename": google_doc_pdf_filename,
+            "drive_file_id": google_doc_pdf_drive_file_id,
+            "download_url": f"https://drive.google.com/uc?id={google_doc_pdf_drive_file_id}&export=download",
+            "edit_url": f"https://drive.google.com/file/d/{google_doc_pdf_drive_file_id}/view",
+            "size_bytes": google_doc_pdf_size_bytes,
+        })
+    return artifacts
 
 
 def _doc(collection: str, doc_id: str) -> dict[str, Any] | None:
@@ -197,6 +254,14 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
         output_drive_file_id: str | None = None
         output_folder_id: str | None = None
         download_url: str | None = None
+        # Sprint D-1: PDF artifact (rendered from output xlsx via LibreOffice)
+        pdf_drive_file_id: str | None = None
+        pdf_filename: str | None = None
+        pdf_size_bytes: int = 0
+        # Sprint D-2: Narrative PDF artifact (rendered from a Google Doc template)
+        narrative_pdf_drive_file_id: str | None = None
+        narrative_pdf_filename: str | None = None
+        narrative_pdf_size_bytes: int = 0
 
         if root and drive_token:
             try:
@@ -217,6 +282,75 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
                     download_url = (
                         f"https://drive.google.com/uc?id={output_drive_file_id}&export=download"
                     )
+
+                # Sprint D-1 — Option 4: render the output xlsx as PDF and
+                # upload it next to the xlsx. Best-effort — a missing or slow
+                # LibreOffice never fails the run.
+                if tpl.get("pdf_export_xlsx"):
+                    try:
+                        pdf_bytes = excel_engine.xlsx_to_pdf(result["output_bytes"])
+                        if pdf_bytes:
+                            pdf_filename = (
+                                f"{ts_for_file}_{model_code}_V{model_version}_AP{pack_number:02d}.pdf"
+                            )
+                            pdf_drive_file_id = drive_service.upload_file(
+                                output_folder_id, pdf_filename, pdf_bytes,
+                                PDF_MIME, user_access_token=drive_token,
+                            )
+                            pdf_size_bytes = len(pdf_bytes)
+                            logger.info(
+                                "Run %s: published PDF (%d bytes, file_id=%s)",
+                                run_id, pdf_size_bytes, pdf_drive_file_id,
+                            )
+                        else:
+                            logger.warning("Run %s: xlsx→pdf returned None", run_id)
+                    except Exception:  # noqa: BLE001 — PDF is best-effort
+                        logger.warning(
+                            "Run %s: PDF export failed; xlsx is still available",
+                            run_id, exc_info=True,
+                        )
+
+                # Sprint D-2 — Option 1: narrative PDF from a Google Doc
+                # template (designer-friendly WYSIWYG). Best-effort.
+                gdoc_template_id = tpl.get("google_doc_template_drive_file_id")
+                if gdoc_template_id:
+                    try:
+                        run_meta = {
+                            "id": run_id,
+                            "project_name": proj.get("name", ""),
+                            "project_code": project_code,
+                            "model_name": model.get("name", ""),
+                            "model_code": model_code,
+                            "pack_name": pack.get("name", ""),
+                            "pack_code": pack_code,
+                            "started_at": started_at.isoformat(),
+                        }
+                        narrative_pdf_bytes = narrative_pdf_service.render_narrative_pdf_from_google_doc(
+                            template_doc_id=gdoc_template_id,
+                            output_xlsx_bytes=result["output_bytes"],
+                            run_meta=run_meta,
+                            user_access_token=drive_token,
+                        )
+                        if narrative_pdf_bytes:
+                            narrative_pdf_filename = (
+                                f"{ts_for_file}_{model_code}_V{model_version}_AP{pack_number:02d}_narrative.pdf"
+                            )
+                            narrative_pdf_drive_file_id = drive_service.upload_file(
+                                output_folder_id, narrative_pdf_filename, narrative_pdf_bytes,
+                                PDF_MIME, user_access_token=drive_token,
+                            )
+                            narrative_pdf_size_bytes = len(narrative_pdf_bytes)
+                            logger.info(
+                                "Run %s: published narrative PDF (%d bytes, file_id=%s)",
+                                run_id, narrative_pdf_size_bytes, narrative_pdf_drive_file_id,
+                            )
+                        else:
+                            logger.warning("Run %s: narrative PDF returned None", run_id)
+                    except Exception:  # noqa: BLE001 — narrative PDF is best-effort
+                        logger.warning(
+                            "Run %s: narrative PDF failed; xlsx is still available",
+                            run_id, exc_info=True,
+                        )
             except Exception:  # noqa: BLE001 — Drive ops are best-effort; run still records
                 logger.warning(
                     "Drive output upload failed for run %s — output bytes lost",
@@ -240,22 +374,29 @@ def execute_run_by_id(run_id: str, *, drive_token: str | None = None) -> dict[st
             "output_folder_id": output_folder_id,                                # Sprint G1
             "output_folder_url": drive_service.folder_url(output_folder_id),     # Sprint G1
             "output_filename": out_filename,                                     # Sprint G3
-            "output_artifacts": [                                                # Sprint G1
-                {
-                    "format": "xlsx",
-                    "filename": out_filename,                                    # Sprint G3
-                    "drive_file_id": output_drive_file_id,
-                    "download_url": download_url,
-                    "edit_url": (
-                        f"https://docs.google.com/spreadsheets/d/{output_drive_file_id}/edit"
-                        if output_drive_file_id else None
-                    ),
-                    "size_bytes": len(result["output_bytes"]),
-                }
-            ] if output_drive_file_id else [],
+            "output_artifacts": _build_artifacts(
+                xlsx_drive_file_id=output_drive_file_id,
+                xlsx_filename=out_filename,
+                xlsx_size_bytes=len(result["output_bytes"]),
+                xlsx_download_url=download_url,
+                pdf_drive_file_id=pdf_drive_file_id,
+                pdf_filename=pdf_filename,
+                pdf_size_bytes=pdf_size_bytes,
+                google_doc_pdf_drive_file_id=narrative_pdf_drive_file_id,
+                google_doc_pdf_filename=narrative_pdf_filename,
+                google_doc_pdf_size_bytes=narrative_pdf_size_bytes,
+            ),
             # Legacy fields kept for back-compat (frontends still read these)
             "output_download_url": download_url,
             "output_drive_file_id": output_drive_file_id,
+            # Sprint D-1: top-level PDF fields for the RunsPage "📄 PDF" column.
+            # Null when no PDF was produced (template flag off, LO not present,
+            # or render failure).
+            "output_pdf_drive_file_id": pdf_drive_file_id,
+            "output_pdf_filename": pdf_filename,
+            # Sprint D-2: top-level narrative PDF fields (Google Doc template).
+            "output_narrative_pdf_drive_file_id": narrative_pdf_drive_file_id,
+            "output_narrative_pdf_filename": narrative_pdf_filename,
             "warnings": result["warnings"],
             "updated_at": completed_at,
             "drive_token": None,
