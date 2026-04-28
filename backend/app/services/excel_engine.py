@@ -62,6 +62,58 @@ def inject_table_data(wb: openpyxl.Workbook, sheet_name: str, start_row: int, co
             ws[cell_ref] = row_data[key]
 
 
+def xlsx_to_pdf(file_bytes: bytes) -> bytes | None:
+    """Convert .xlsx bytes to PDF bytes via LibreOffice headless.
+
+    Sprint D-1: Used to publish a PDF artifact alongside the xlsx output of
+    every Run whose OutputTemplate has ``pdf_export_xlsx = True``. The PDF
+    is whatever LibreOffice would render for the workbook's print/page-setup
+    — same fidelity Marc gets when he File → Download → PDF in Sheets.
+
+    Returns the PDF bytes, or ``None`` if LibreOffice is unavailable or the
+    conversion produced no output (best-effort; callers should treat None as
+    "skip this artifact, don't fail the run").
+    """
+    lo_path = _find_libreoffice()
+    if not lo_path:
+        logger.warning("LibreOffice not found — skipping xlsx→pdf conversion")
+        return None
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        input_path = os.path.join(tmpdir, "input.xlsx")
+        with open(input_path, "wb") as f:
+            f.write(file_bytes)
+
+        try:
+            env = {**os.environ, "HOME": tmpdir}
+            r = subprocess.run(
+                [lo_path, "--headless", "--norestore", "--calc", "--convert-to", "pdf",
+                 "--outdir", tmpdir, input_path],
+                capture_output=True, timeout=LIBREOFFICE_TIMEOUT, cwd=tmpdir, env=env,
+            )
+            logger.info("xlsx→pdf: exit=%d", r.returncode)
+
+            pdf_path = os.path.join(tmpdir, "input.pdf")
+            if not os.path.exists(pdf_path):
+                # Fallback: scan dir for any .pdf
+                for fname in os.listdir(tmpdir):
+                    if fname.endswith(".pdf"):
+                        pdf_path = os.path.join(tmpdir, fname)
+                        break
+                else:
+                    logger.warning(
+                        "xlsx→pdf produced no output. stderr=%s",
+                        (r.stderr or b"").decode("utf-8", errors="replace")[:500],
+                    )
+                    return None
+
+            with open(pdf_path, "rb") as f:
+                return f.read()
+        except subprocess.TimeoutExpired:
+            logger.warning("xlsx→pdf timed out after %ds", LIBREOFFICE_TIMEOUT)
+            return None
+
+
 def recalculate_with_libreoffice(file_bytes: bytes) -> bytes | None:
     """Recalculate an .xlsx file using LibreOffice headless.
 

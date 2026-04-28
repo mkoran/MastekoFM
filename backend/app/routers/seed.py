@@ -108,6 +108,7 @@ def _seed_one(
     project_description: str,
     user_token: str,
     current_user: dict,
+    pdf_export_xlsx: bool = False,  # Sprint D-1: opt the seed's OutputTemplate into PDF
 ) -> dict[str, Any]:
     """Generic seeder used by both Hello World and Campus Adele endpoints."""
     root = _drive_root_id()
@@ -201,6 +202,7 @@ def _seed_one(
             "size_bytes": len(content),
             "uploaded_by": current_user["uid"],
             "uploaded_by_email": current_user.get("email", ""),
+            "pdf_export_xlsx": pdf_export_xlsx,  # Sprint D-1
             "created_at": now,
             "updated_at": now,
         }
@@ -377,6 +379,7 @@ async def seed_helloworld(current_user: CurrentUser, request: Request):
         project_description="Tiny Hello World Project — verifies three-way composition end-to-end.",
         user_token=user_token,
         current_user=current_user,
+        pdf_export_xlsx=True,  # Sprint D-1: showcase PDF artifact alongside xlsx
     )
 
 
